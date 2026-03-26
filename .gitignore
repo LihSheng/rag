@@ -9,3 +9,5 @@ src/*.egg-info/
 *.pyo
 *.pyd
 .DS_Store
+frontend/node_modules/
+frontend/dist/

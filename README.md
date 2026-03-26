@@ -111,6 +111,7 @@ Copy `.env.example` to `.env` if you want a local env file for Docker Compose.
 Important variables:
 
 ```env
+DEFAULT_PIPELINE=manual
 CHAT_PROVIDER=ollama
 CHAT_BASE_URL=http://ollama:11434/v1
 CHAT_API_KEY=ollama
@@ -204,6 +205,20 @@ docker compose exec app ragstack langchain ask "What is the manual pipeline tryi
 docker compose exec app ragstack compare eval
 ```
 
+### 7. Open the web UI
+
+After the stack is up, open:
+
+```text
+http://localhost:8000
+```
+
+The UI sends queries to:
+
+```text
+POST /api/query
+```
+
 Optional custom evaluation file:
 
 ```bash
@@ -218,6 +233,42 @@ ragstack manual ask "question"
 ragstack langchain ingest [--source-dir PATH]
 ragstack langchain ask "question"
 ragstack compare eval [--eval-path PATH]
+```
+
+## HTTP API
+
+The app also exposes a FastAPI service.
+
+- `GET /api/health`: basic status + active default pipeline
+- `POST /api/query`: run RAG query on the pipeline selected by `DEFAULT_PIPELINE`
+
+Request:
+
+```json
+{
+  "question": "How does this stack stay portable?"
+}
+```
+
+Response:
+
+```json
+{
+  "pipeline": "manual",
+  "question": "How does this stack stay portable?",
+  "answer": "...",
+  "insufficient_context": false,
+  "citations": []
+}
+```
+
+When runtime failures occur, the API returns:
+
+```json
+{
+  "error": "PIPELINE_ERROR",
+  "message": "..."
+}
 ```
 
 ## How Ingestion Works
@@ -301,6 +352,16 @@ Example:
 ragstack manual ingest
 ragstack manual ask "What does Qdrant store?"
 ```
+
+To run the React frontend in dev mode with hot reload:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Keep the backend running on `http://localhost:8000` and open the Vite URL for development.
 
 ## Current Status
 

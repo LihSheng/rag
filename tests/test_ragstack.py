@@ -65,6 +65,7 @@ def make_settings(
     rerank_top_n: int = 20,
 ) -> Settings:
     return Settings(
+        default_pipeline="manual",
         chat_provider="ollama",
         chat_base_url="http://localhost:11434/v1",
         chat_api_key="ollama",

@@ -7,6 +7,7 @@ from typing import Literal
 
 ProviderName = Literal["ollama", "openai_compatible"]
 RerankProviderName = Literal["token_overlap", "cross_encoder"]
+PipelineName = Literal["manual", "langchain"]
 
 
 def _env_str(name: str, default: str) -> str:
@@ -63,6 +64,7 @@ def strip_openai_api_suffix(base_url: str | None) -> str | None:
 
 @dataclass(frozen=True)
 class Settings:
+    default_pipeline: PipelineName
     chat_provider: ProviderName
     chat_base_url: str | None
     chat_api_key: str
@@ -98,6 +100,7 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
+            default_pipeline=_env_str("DEFAULT_PIPELINE", "manual"),  # type: ignore[arg-type]
             chat_provider=_env_str("CHAT_PROVIDER", "ollama"),  # type: ignore[arg-type]
             chat_base_url=normalize_openai_base_url(
                 _env_str("CHAT_BASE_URL", "http://localhost:11434/v1")

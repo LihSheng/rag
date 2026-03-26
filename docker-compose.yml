@@ -6,8 +6,11 @@ services:
     working_dir: /workspace
     volumes:
       - ./:/workspace
+    ports:
+      - "8000:8000"
     environment:
       PYTHONPATH: /workspace/src
+      DEFAULT_PIPELINE: ${DEFAULT_PIPELINE:-manual}
       CHAT_PROVIDER: ${CHAT_PROVIDER:-ollama}
       CHAT_BASE_URL: ${CHAT_BASE_URL:-http://ollama:11434/v1}
       CHAT_API_KEY: ${CHAT_API_KEY:-ollama}
