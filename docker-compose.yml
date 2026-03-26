@@ -7,7 +7,7 @@ services:
     volumes:
       - ./:/workspace
     ports:
-      - "8000:8000"
+      - "8008:8000"
     environment:
       PYTHONPATH: /workspace/src
       DEFAULT_PIPELINE: ${DEFAULT_PIPELINE:-manual}
