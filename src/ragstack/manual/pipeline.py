@@ -18,9 +18,12 @@ from ragstack.qdrant_store import (
     delete_document,
     ensure_collection,
     indexed_documents,
+    list_chunks,
     query_similar_chunks,
     upsert_chunk_batch,
 )
+from ragstack.retrieval import bm25_rank, rrf_fuse
+from ragstack.rerankers import Reranker, build_reranker
 from ragstack.text_utils import batched, chunk_text
 
 from .loaders import load_corpus_documents
@@ -61,12 +64,14 @@ class ManualRagPipeline:
         settings: Settings,
         embedding_provider: EmbeddingProvider | None = None,
         chat_provider: ChatProvider | None = None,
+        reranker: Reranker | None = None,
         qdrant_client: QdrantClient | None = None,
     ) -> None:
         self.settings = settings
         self.collection_name = settings.collection_name("manual")
         self.embedding_provider = embedding_provider or build_embedding_provider(settings)
         self.chat_provider = chat_provider or build_chat_provider(settings)
+        self.reranker = reranker or build_reranker(settings)
         self.client = qdrant_client or create_qdrant_client(settings.qdrant_url)
 
     def ingest(self, source_dir: Path | None = None) -> IngestionStats:
@@ -126,12 +131,42 @@ class ManualRagPipeline:
 
     def ask(self, question: str) -> AnswerResult:
         query_vector = self.embedding_provider.embed_query(question)
-        citations = query_similar_chunks(
+        final_limit = self.settings.top_k
+        if self.reranker:
+            final_limit = max(self.settings.rerank_top_n, self.settings.top_k)
+
+        semantic_limit = final_limit
+        if self.settings.hybrid_enabled:
+            semantic_limit = max(self.settings.semantic_top_n, final_limit)
+
+        semantic_candidates = query_similar_chunks(
             self.client,
             self.collection_name,
             query_vector=query_vector,
-            limit=self.settings.top_k,
+            limit=semantic_limit,
         )
+        candidates = semantic_candidates
+        if self.settings.hybrid_enabled:
+            lexical_pool = list_chunks(self.client, self.collection_name)
+            lexical_limit = max(self.settings.bm25_top_n, final_limit)
+            lexical_candidates = bm25_rank(
+                question=question,
+                chunks=lexical_pool,
+                limit=lexical_limit,
+            )
+            candidates = rrf_fuse(
+                ranked_lists=[semantic_candidates, lexical_candidates],
+                k=self.settings.rrf_k,
+                limit=max(len(semantic_candidates), len(lexical_candidates), final_limit),
+            )
+
+        citations = candidates[: self.settings.top_k]
+        if self.reranker:
+            citations = self.reranker.rerank(
+                question=question,
+                chunks=candidates,
+                top_k=self.settings.top_k,
+            )
 
         if not has_sufficient_context(citations, self.settings.min_context_score):
             return AnswerResult(
@@ -151,4 +186,3 @@ class ManualRagPipeline:
             citations=citations,
             insufficient_context=False,
         )
-

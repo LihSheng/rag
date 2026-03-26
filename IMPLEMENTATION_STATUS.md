@@ -35,13 +35,15 @@
 - [x] Generate a mixed sample corpus with Markdown and PDF documents.
 - [x] Run a compile check across `src`.
 - [x] Verify that the generated sample PDF can be read by `pypdf`.
-- [ ] Run the full automated test suite.
+- [x] Run the full automated test suite.
 - [ ] Run end-to-end Docker validation with live Ollama and Qdrant containers.
 - [ ] Confirm first-run model pull and second-run reuse behavior in Docker volumes.
 - [ ] Document any fixes needed after live runtime validation.
+- [x] Add optional reranking (`token_overlap` and `cross_encoder`).
+- [x] Add hybrid retrieval (semantic + BM25 + RRF) for the manual pipeline.
 
 ## Current State
 
-- Implementation is paused.
-- The codebase already contains work beyond step 1 because the pause instruction arrived after additional implementation had been completed.
-- The remaining work is validation and any fixes discovered during validation.
+- Implementation is active and feature-complete for manual/LangChain query paths, including optional reranking.
+- Hybrid retrieval is implemented for the manual pipeline.
+- Remaining work is end-to-end Docker validation and runtime hardening.

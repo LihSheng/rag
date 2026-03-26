@@ -43,7 +43,7 @@ def build_rag_messages(question: str, citations: list[RetrievedChunk]) -> list[d
 def has_sufficient_context(citations: list[RetrievedChunk], min_score: float) -> bool:
     if not citations:
         return False
-    return citations[0].score >= min_score
+    return max(citation.score for citation in citations) >= min_score
 
 
 def ensure_citation_markers(answer: str, citations: list[RetrievedChunk]) -> str:
@@ -55,4 +55,3 @@ def ensure_citation_markers(answer: str, citations: list[RetrievedChunk]) -> str
 
     markers = " ".join(f"[{citation.chunk_id}]" for citation in citations[:3])
     return f"{answer}\n\nSupporting chunks: {markers}"
-

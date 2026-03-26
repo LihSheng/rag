@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 ProviderName = Literal["ollama", "openai_compatible"]
+RerankProviderName = Literal["token_overlap", "cross_encoder"]
 
 
 def _env_str(name: str, default: str) -> str:
@@ -78,6 +79,14 @@ class Settings:
     chunk_overlap: int
     top_k: int
     min_context_score: float
+    hybrid_enabled: bool
+    semantic_top_n: int
+    bm25_top_n: int
+    rrf_k: int
+    rerank_enabled: bool
+    rerank_provider: RerankProviderName
+    rerank_model: str
+    rerank_top_n: int
     bootstrap_ollama_url: str | None
     bootstrap_qdrant_url: str | None
     bootstrap_pull_models: bool
@@ -109,6 +118,14 @@ class Settings:
             chunk_overlap=_env_int("CHUNK_OVERLAP", 150),
             top_k=_env_int("TOP_K", 5),
             min_context_score=_env_float("MIN_CONTEXT_SCORE", 0.25),
+            hybrid_enabled=_env_bool("HYBRID_ENABLED", False),
+            semantic_top_n=_env_int("SEMANTIC_TOP_N", 20),
+            bm25_top_n=_env_int("BM25_TOP_N", 20),
+            rrf_k=_env_int("RRF_K", 60),
+            rerank_enabled=_env_bool("RERANK_ENABLED", False),
+            rerank_provider=_env_str("RERANK_PROVIDER", "token_overlap"),  # type: ignore[arg-type]
+            rerank_model=_env_str("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"),
+            rerank_top_n=_env_int("RERANK_TOP_N", 20),
             bootstrap_ollama_url=strip_openai_api_suffix(
                 os.getenv("BOOTSTRAP_OLLAMA_URL") or _env_str("CHAT_BASE_URL", "http://localhost:11434/v1")
             ),
@@ -116,4 +133,3 @@ class Settings:
             bootstrap_pull_models=_env_bool("BOOTSTRAP_PULL_MODELS", True),
             bootstrap_wait_timeout=_env_int("BOOTSTRAP_WAIT_TIMEOUT", 180),
         )
-

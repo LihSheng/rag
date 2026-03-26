@@ -17,7 +17,14 @@ from ragstack.prompting import (
     ensure_citation_markers,
     has_sufficient_context,
 )
-from ragstack.qdrant_store import create_qdrant_client, delete_document, ensure_collection, indexed_documents
+from ragstack.qdrant_store import (
+    create_qdrant_client,
+    delete_document,
+    ensure_collection,
+    indexed_documents,
+    qdrant_point_id,
+)
+from ragstack.rerankers import Reranker, build_reranker
 
 from ragstack.manual.loaders import load_corpus_documents
 from ragstack.manual.pipeline import chunk_loaded_document
@@ -32,12 +39,14 @@ class LangChainRagPipeline:
         qdrant_client: QdrantClient | None = None,
         embeddings: Any | None = None,
         chat_model: Any | None = None,
+        reranker: Reranker | None = None,
     ) -> None:
         self.settings = settings
         self.collection_name = settings.collection_name("langchain")
         self.client = qdrant_client or create_qdrant_client(settings.qdrant_url)
         self.embeddings = embeddings or build_langchain_embeddings(settings)
         self.chat_model = chat_model or build_langchain_chat_model(settings)
+        self.reranker = reranker or build_reranker(settings)
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
@@ -87,8 +96,19 @@ class LangChainRagPipeline:
 
     def ask(self, question: str) -> AnswerResult:
         vector_store = self._vector_store()
-        raw_results = vector_store.similarity_search_with_score(question, k=self.settings.top_k)
-        citations = [self._retrieved_chunk(document, score) for document, score in raw_results]
+        retrieval_limit = self.settings.top_k
+        if self.reranker:
+            retrieval_limit = max(self.settings.rerank_top_n, self.settings.top_k)
+
+        raw_results = vector_store.similarity_search_with_score(question, k=retrieval_limit)
+        candidates = [self._retrieved_chunk(document, score) for document, score in raw_results]
+        citations = candidates[: self.settings.top_k]
+        if self.reranker:
+            citations = self.reranker.rerank(
+                question=question,
+                chunks=candidates,
+                top_k=self.settings.top_k,
+            )
 
         if not has_sufficient_context(citations, self.settings.min_context_score):
             return AnswerResult(
@@ -181,7 +201,7 @@ class LangChainRagPipeline:
             metadata = dict(doc.metadata)
             metadata.update({"chunk_id": chunk_id, "text": source_text, "pipeline": "langchain"})
             normalized_docs.append(LangDocument(page_content=source_text, metadata=metadata))
-            ids.append(chunk_id)
+            ids.append(qdrant_point_id(chunk_id))
 
         return normalized_docs, ids
 
@@ -211,4 +231,3 @@ def _optional_str(value: Any) -> str | None:
     if value in {None, ""}:
         return None
     return str(value)
-

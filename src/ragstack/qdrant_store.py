@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from qdrant_client import QdrantClient, models
@@ -103,7 +104,7 @@ def upsert_chunk_batch(
 ) -> None:
     points = [
         models.PointStruct(
-            id=chunk.chunk_id,
+            id=qdrant_point_id(chunk.chunk_id),
             vector=vector,
             payload=chunk.payload(),
         )
@@ -152,6 +153,49 @@ def query_similar_chunks(
     return results
 
 
+def list_chunks(client: QdrantClient, collection_name: str) -> list[RetrievedChunk]:
+    if not client.collection_exists(collection_name):
+        return []
+
+    results: list[RetrievedChunk] = []
+    offset: Any = None
+
+    while True:
+        points, offset = client.scroll(
+            collection_name=collection_name,
+            offset=offset,
+            limit=256,
+            with_payload=True,
+            with_vectors=False,
+        )
+
+        for point in points:
+            payload = point.payload or {}
+            results.append(
+                RetrievedChunk(
+                    chunk_id=str(payload.get("chunk_id", point.id)),
+                    source_path=str(payload.get("source_path", "")),
+                    source_type=str(payload.get("source_type", "")),
+                    checksum=str(payload.get("checksum", "")),
+                    pipeline=str(payload.get("pipeline", "")),
+                    text=str(payload.get("text", "")),
+                    score=0.0,
+                    document_id=str(payload.get("document_id", "")),
+                    page=_optional_int(payload.get("page")),
+                    section=_optional_str(payload.get("section")),
+                )
+            )
+
+        if offset is None:
+            break
+
+    return results
+
+
+def qdrant_point_id(value: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, value))
+
+
 def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -162,4 +206,3 @@ def _optional_str(value: Any) -> str | None:
     if value in {None, ""}:
         return None
     return str(value)
-

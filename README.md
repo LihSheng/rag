@@ -126,6 +126,16 @@ QDRANT_COLLECTION_PREFIX=rag
 
 SOURCE_DIR=/workspace/data/corpus
 EVAL_PATH=/workspace/data/eval/questions.json
+TOP_K=5
+MIN_CONTEXT_SCORE=0.25
+HYBRID_ENABLED=false
+SEMANTIC_TOP_N=20
+BM25_TOP_N=20
+RRF_K=60
+RERANK_ENABLED=false
+RERANK_PROVIDER=token_overlap
+RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+RERANK_TOP_N=20
 ```
 
 If you later want to use an external OpenAI-compatible provider, change values like:
@@ -232,16 +242,34 @@ This makes re-ingestion idempotent for unchanged files.
 When you ask a question:
 
 1. the question is embedded
-2. the top `k` similar chunks are fetched from Qdrant
-3. those chunks are formatted into a grounded prompt
-4. the chat model answers only from retrieved context
-5. the output includes citations and can return an insufficient-context response
+2. semantic candidates are fetched from Qdrant
+3. optional lexical candidates are scored with BM25
+4. optional hybrid mode fuses semantic and BM25 ranks with RRF
+5. optional reranker refines the candidate list
+6. final chunks are formatted into a grounded prompt
+7. the chat model answers only from retrieved context
+8. the output includes citations and can return an insufficient-context response
 
 Default behavior:
 
 - chunk size: about 1000 characters
 - chunk overlap: about 150 characters
 - top results: 5
+
+Optional reranking behavior:
+
+- retrieve a broader candidate pool (`RERANK_TOP_N`, default `20`)
+- rerank candidates (`token_overlap` built-in or `cross_encoder` model)
+- pass final top `TOP_K` chunks to generation
+- when `RERANK_PROVIDER=cross_encoder`, install optional dependencies:
+  - `pip install -e ".[rerank]"`
+
+Optional hybrid retrieval behavior:
+
+- enable hybrid mode with `HYBRID_ENABLED=true`
+- retrieve semantic candidates (`SEMANTIC_TOP_N`)
+- score lexical candidates using BM25 (`BM25_TOP_N`)
+- fuse both lists with Reciprocal Rank Fusion (`RRF_K`)
 
 ## Corpus And Evaluation Files
 
@@ -285,6 +313,8 @@ What is already in place:
 - LangChain pipeline
 - provider abstraction
 - comparison command
+- hybrid retrieval (semantic + BM25 with RRF fusion)
+- optional reranking for manual and LangChain query flows
 - sample corpus and eval inputs
 
 What still needs to be confirmed:
@@ -297,8 +327,6 @@ What still needs to be confirmed:
 
 After you are comfortable with this version, useful follow-ups are:
 
-- add reranking
-- add hybrid keyword + vector retrieval
 - compare chunking strategies
 - add a simple HTTP API
 - add source highlighting in answers

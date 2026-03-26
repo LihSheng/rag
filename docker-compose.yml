@@ -20,6 +20,16 @@ services:
       QDRANT_COLLECTION_PREFIX: ${QDRANT_COLLECTION_PREFIX:-rag}
       SOURCE_DIR: ${SOURCE_DIR:-/workspace/data/corpus}
       EVAL_PATH: ${EVAL_PATH:-/workspace/data/eval/questions.json}
+      TOP_K: ${TOP_K:-5}
+      MIN_CONTEXT_SCORE: ${MIN_CONTEXT_SCORE:-0.25}
+      HYBRID_ENABLED: ${HYBRID_ENABLED:-false}
+      SEMANTIC_TOP_N: ${SEMANTIC_TOP_N:-20}
+      BM25_TOP_N: ${BM25_TOP_N:-20}
+      RRF_K: ${RRF_K:-60}
+      RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      RERANK_PROVIDER: ${RERANK_PROVIDER:-token_overlap}
+      RERANK_MODEL: ${RERANK_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}
+      RERANK_TOP_N: ${RERANK_TOP_N:-20}
       BOOTSTRAP_OLLAMA_URL: http://ollama:11434
       BOOTSTRAP_QDRANT_URL: http://qdrant:6333
       BOOTSTRAP_PULL_MODELS: ${BOOTSTRAP_PULL_MODELS:-true}
@@ -48,4 +58,3 @@ services:
 volumes:
   ollama_models:
   qdrant_storage:
-
