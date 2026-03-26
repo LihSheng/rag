@@ -1,0 +1,2 @@
+"""LangChain-backed RAG implementation."""
+

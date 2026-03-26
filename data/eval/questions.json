@@ -1,0 +1,14 @@
+[
+    {
+        "question": "How does this stack stay portable when moved to another machine?",
+        "expected_source": "rag-basics.md"
+    },
+    {
+        "question": "What is the manual pipeline trying to teach?",
+        "expected_source": "rag-basics.md"
+    },
+    {
+        "question": "Why would someone compare the manual and LangChain implementations?",
+        "expected_source": "rag-basics.md"
+    }
+]

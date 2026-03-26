@@ -1,0 +1,51 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    environment:
+      PYTHONPATH: /workspace/src
+      CHAT_PROVIDER: ${CHAT_PROVIDER:-ollama}
+      CHAT_BASE_URL: ${CHAT_BASE_URL:-http://ollama:11434/v1}
+      CHAT_API_KEY: ${CHAT_API_KEY:-ollama}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen2.5:3b}
+      EMBED_PROVIDER: ${EMBED_PROVIDER:-ollama}
+      EMBED_BASE_URL: ${EMBED_BASE_URL:-http://ollama:11434/v1}
+      EMBED_API_KEY: ${EMBED_API_KEY:-ollama}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_COLLECTION_PREFIX: ${QDRANT_COLLECTION_PREFIX:-rag}
+      SOURCE_DIR: ${SOURCE_DIR:-/workspace/data/corpus}
+      EVAL_PATH: ${EVAL_PATH:-/workspace/data/eval/questions.json}
+      BOOTSTRAP_OLLAMA_URL: http://ollama:11434
+      BOOTSTRAP_QDRANT_URL: http://qdrant:6333
+      BOOTSTRAP_PULL_MODELS: ${BOOTSTRAP_PULL_MODELS:-true}
+      BOOTSTRAP_WAIT_TIMEOUT: ${BOOTSTRAP_WAIT_TIMEOUT:-180}
+    depends_on:
+      - ollama
+      - qdrant
+    stdin_open: true
+    tty: true
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  ollama_models:
+  qdrant_storage:
+
