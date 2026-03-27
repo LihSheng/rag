@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -94,9 +95,29 @@ class Settings:
     bootstrap_qdrant_url: str | None
     bootstrap_pull_models: bool
     bootstrap_wait_timeout: int
+    api_schema_version: str = "2026-03-27"
+    jwt_secret: str = "dev_secret_key_change_me_32chars"
+    jwt_algorithm: str = "HS256"
+    jwt_exp_hours: int = 24
+    admin_username: str = "admin"
+    admin_password: str = "change-me-admin-password"
+    viewer_username: str = ""
+    viewer_password: str = ""
+    default_tenant_id: str = "default"
+    default_access_tags: str = "internal"
 
     def collection_name(self, pipeline: str) -> str:
         return f"{self.qdrant_collection_prefix}_{pipeline}"
+
+    def embedding_fingerprint(self) -> str:
+        raw = "|".join(
+            [
+                self.embed_provider,
+                self.embed_model,
+                self.embed_base_url or "",
+            ]
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -137,4 +158,14 @@ class Settings:
             bootstrap_qdrant_url=os.getenv("BOOTSTRAP_QDRANT_URL") or _env_str("QDRANT_URL", "http://localhost:6333"),
             bootstrap_pull_models=_env_bool("BOOTSTRAP_PULL_MODELS", True),
             bootstrap_wait_timeout=_env_int("BOOTSTRAP_WAIT_TIMEOUT", 180),
+            api_schema_version=_env_str("API_SCHEMA_VERSION", "2026-03-27"),
+            jwt_secret=_env_str("JWT_SECRET", "dev_secret_key_change_me_32chars"),
+            jwt_algorithm=_env_str("JWT_ALGORITHM", "HS256"),
+            jwt_exp_hours=_env_int("JWT_EXP_HOURS", 24),
+            admin_username=_env_str("ADMIN_USERNAME", "admin"),
+            admin_password=_env_str("ADMIN_PASSWORD", "change-me-admin-password"),
+            viewer_username=_env_str("VIEWER_USERNAME", ""),
+            viewer_password=_env_str("VIEWER_PASSWORD", ""),
+            default_tenant_id=_env_str("DEFAULT_TENANT_ID", "default"),
+            default_access_tags=_env_str("DEFAULT_ACCESS_TAGS", "internal"),
         )

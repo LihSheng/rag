@@ -18,6 +18,9 @@ def build_parser() -> argparse.ArgumentParser:
     manual_subparsers = manual.add_subparsers(dest="manual_command", required=True)
     manual_ingest = manual_subparsers.add_parser("ingest", help="Index the source corpus with the manual pipeline")
     manual_ingest.add_argument("--source-dir", type=Path, default=None)
+    manual_backfill = manual_subparsers.add_parser("backfill-metadata", help="Backfill metadata in manual collection")
+    manual_backfill.add_argument("--collection-name", type=str, default=None)
+    manual_backfill.add_argument("--apply", action="store_true")
     manual_ask = manual_subparsers.add_parser("ask", help="Ask the manual pipeline a question")
     manual_ask.add_argument("question")
 
@@ -25,6 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     langchain_subparsers = langchain.add_subparsers(dest="langchain_command", required=True)
     langchain_ingest = langchain_subparsers.add_parser("ingest", help="Index the source corpus with LangChain")
     langchain_ingest.add_argument("--source-dir", type=Path, default=None)
+    langchain_backfill = langchain_subparsers.add_parser("backfill-metadata", help="Backfill metadata in LangChain collection")
+    langchain_backfill.add_argument("--collection-name", type=str, default=None)
+    langchain_backfill.add_argument("--apply", action="store_true")
     langchain_ask = langchain_subparsers.add_parser("ask", help="Ask the LangChain pipeline a question")
     langchain_ask.add_argument("question")
 
@@ -47,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
             result = pipeline.ingest(args.source_dir)
             _print_ingestion_result(result.to_dict())
             return 0
+        if args.manual_command == "backfill-metadata":
+            result = pipeline.backfill_metadata(dry_run=not args.apply, collection_name=args.collection_name)
+            _print_backfill_result(result.to_dict())
+            return 0
 
         answer = pipeline.ask(args.question)
         _print_answer(answer.to_dict())
@@ -57,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.langchain_command == "ingest":
             result = pipeline.ingest(args.source_dir)
             _print_ingestion_result(result.to_dict())
+            return 0
+        if args.langchain_command == "backfill-metadata":
+            result = pipeline.backfill_metadata(dry_run=not args.apply, collection_name=args.collection_name)
+            _print_backfill_result(result.to_dict())
             return 0
 
         answer = pipeline.ask(args.question)
@@ -117,6 +131,18 @@ def _print_answer(answer: dict[str, Any]) -> None:
         print(f"- {citation['chunk_id']} | score={citation['score']:.4f} | {location}")
 
 
+def _print_backfill_result(result: dict[str, Any]) -> None:
+    print(f"Pipeline: {result['pipeline']}")
+    print(f"Collection: {result['collection_name']}")
+    print(f"Dry run: {result['dry_run']}")
+    print(f"Total points: {result['total_points']}")
+    print(f"Points missing metadata: {result['missing_points']}")
+    print(f"Points updated: {result['updated_points']}")
+    print("Missing field counts:")
+    for key, value in result["missing_field_counts"].items():
+        print(f"- {key}: {value}")
+
+
 def _print_eval_results(
     eval_rows: list[dict[str, Any]],
     manual: ManualRagPipeline,
@@ -153,4 +179,3 @@ def _print_pipeline_eval(label: str, result: dict[str, Any]) -> None:
         if citation.get("section"):
             location = f"{location} section {citation['section']}"
         print(f"- {citation['chunk_id']} | score={citation['score']:.4f} | {location}")
-

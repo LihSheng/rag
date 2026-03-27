@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,25 +27,40 @@ class OpsLogStore:
                     target TEXT NOT NULL,
                     actor TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    job_id TEXT,
                     detail TEXT,
                     created_at TEXT NOT NULL
                 )
                 """
             )
+            self._ensure_column(conn, "operations", "job_id", "TEXT")
             conn.commit()
 
     @classmethod
     def from_data_dir(cls, data_dir: Path) -> "OpsLogStore":
         return cls(data_dir / "admin_ops.db")
 
-    def record(self, *, action: str, target: str, actor: str, status: str, detail: str | None = None) -> None:
+    @staticmethod
+    def new_job_id() -> str:
+        return str(uuid.uuid4())
+
+    def record(
+        self,
+        *,
+        action: str,
+        target: str,
+        actor: str,
+        status: str,
+        detail: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO operations (action, target, actor, status, detail, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO operations (action, target, actor, status, job_id, detail, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (action, target, actor, status, detail, _utc_iso()),
+                (action, target, actor, status, job_id, detail, _utc_iso()),
             )
             conn.commit()
 
@@ -52,7 +68,7 @@ class OpsLogStore:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                SELECT id, action, target, actor, status, detail, created_at
+                SELECT id, action, target, actor, status, job_id, detail, created_at
                 FROM operations
                 ORDER BY id DESC
                 LIMIT ?
@@ -67,11 +83,20 @@ class OpsLogStore:
                 "target": row[2],
                 "actor": row[3],
                 "status": row[4],
-                "detail": row[5],
-                "created_at": row[6],
+                "job_id": row[5],
+                "detail": row[6],
+                "created_at": row[7],
             }
             for row in rows
         ]
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        cursor = conn.execute(f"PRAGMA table_info({table})")
+        existing = {str(row[1]) for row in cursor.fetchall()}
+        if column in existing:
+            return
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

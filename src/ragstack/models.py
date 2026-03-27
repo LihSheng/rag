@@ -32,6 +32,11 @@ class ChunkRecord:
     page: int | None = None
     section: str | None = None
     is_active: bool = True
+    tenant_id: str | None = None
+    doc_type: str | None = None
+    created_at: str | None = None
+    access_tags: list[str] | None = None
+    embedding_fingerprint: str | None = None
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -45,6 +50,11 @@ class ChunkRecord:
             "checksum": self.checksum,
             "pipeline": self.pipeline,
             "is_active": self.is_active,
+            "tenant_id": self.tenant_id,
+            "doc_type": self.doc_type,
+            "created_at": self.created_at,
+            "access_tags": self.access_tags,
+            "embedding_fingerprint": self.embedding_fingerprint,
         }
 
 
@@ -95,6 +105,20 @@ class IngestionStats:
     skipped_files: int
     indexed_chunks: int
     deleted_documents: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BackfillStats:
+    pipeline: str
+    collection_name: str
+    total_points: int
+    missing_points: int
+    updated_points: int
+    missing_field_counts: dict[str, int]
+    dry_run: bool
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

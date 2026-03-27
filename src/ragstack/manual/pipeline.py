@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from qdrant_client import QdrantClient
 
 from ragstack.config import Settings
-from ragstack.models import AnswerResult, ChunkRecord, IngestionStats, LoadedDocument
+from ragstack.models import AnswerResult, BackfillStats, ChunkRecord, IngestionStats, LoadedDocument
 from ragstack.prompting import (
     INSUFFICIENT_CONTEXT_ANSWER,
     build_rag_messages,
@@ -14,6 +15,7 @@ from ragstack.prompting import (
 )
 from ragstack.providers import ChatProvider, EmbeddingProvider, build_chat_provider, build_embedding_provider
 from ragstack.qdrant_store import (
+    backfill_collection_metadata,
     create_qdrant_client,
     delete_document,
     ensure_collection,
@@ -53,6 +55,7 @@ def chunk_loaded_document(
                     text=text,
                     page=segment.page,
                     section=segment.section,
+                    created_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
                 )
             )
             chunk_index += 1
@@ -75,6 +78,7 @@ class ManualRagPipeline:
         self.chat_provider = chat_provider or build_chat_provider(settings)
         self.reranker = reranker or build_reranker(settings)
         self.client = qdrant_client or create_qdrant_client(settings.qdrant_url)
+        self.embedding_fingerprint = settings.embedding_fingerprint()
 
     def ingest(self, source_dir: Path | None = None, collection_name: str | None = None) -> IngestionStats:
         source_dir = source_dir or self.settings.source_dir
@@ -108,6 +112,26 @@ class ManualRagPipeline:
                     overlap=self.settings.chunk_overlap,
                 )
             )
+        chunk_buffer = [
+            ChunkRecord(
+                document_id=chunk.document_id,
+                chunk_id=chunk.chunk_id,
+                source_path=chunk.source_path,
+                source_type=chunk.source_type,
+                checksum=chunk.checksum,
+                pipeline=chunk.pipeline,
+                text=chunk.text,
+                page=chunk.page,
+                section=chunk.section,
+                is_active=chunk.is_active,
+                tenant_id=self.settings.default_tenant_id,
+                doc_type=chunk.source_type,
+                created_at=chunk.created_at,
+                access_tags=[tag.strip() for tag in self.settings.default_access_tags.split(",") if tag.strip()],
+                embedding_fingerprint=self.embedding_fingerprint,
+            )
+            for chunk in chunk_buffer
+        ]
 
         if chunk_buffer:
             vector_size = len(self.embedding_provider.embed_query("dimension probe"))
@@ -130,6 +154,26 @@ class ManualRagPipeline:
             skipped_files=skipped_files,
             indexed_chunks=len(chunk_buffer),
             deleted_documents=deleted_documents,
+        )
+
+    def backfill_metadata(self, *, dry_run: bool = True, collection_name: str | None = None) -> BackfillStats:
+        target_collection = collection_name or self.collection_name
+        result = backfill_collection_metadata(
+            self.client,
+            target_collection,
+            default_tenant_id=self.settings.default_tenant_id,
+            default_access_tags=[tag.strip() for tag in self.settings.default_access_tags.split(",") if tag.strip()],
+            embedding_fingerprint=self.embedding_fingerprint,
+            dry_run=dry_run,
+        )
+        return BackfillStats(
+            pipeline="manual",
+            collection_name=target_collection,
+            total_points=int(result["total_points"]),
+            missing_points=int(result["missing_points"]),
+            updated_points=int(result["updated_points"]),
+            missing_field_counts=dict(result["missing_field_counts"]),
+            dry_run=bool(result["dry_run"]),
         )
 
     def ask(self, question: str) -> AnswerResult:

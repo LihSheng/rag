@@ -124,6 +124,17 @@ EMBED_MODEL=nomic-embed-text
 
 QDRANT_URL=http://qdrant:6333
 QDRANT_COLLECTION_PREFIX=rag
+QDRANT_ACTIVE_ALIAS=rag_active
+API_SCHEMA_VERSION=2026-03-27
+JWT_SECRET=change-me-32-characters-minimum
+JWT_ALGORITHM=HS256
+JWT_EXP_HOURS=24
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=change-me-admin-password
+VIEWER_USERNAME=
+VIEWER_PASSWORD=
+DEFAULT_TENANT_ID=default
+DEFAULT_ACCESS_TAGS=internal
 
 SOURCE_DIR=/workspace/data/corpus
 EVAL_PATH=/workspace/data/eval/questions.json
@@ -229,8 +240,10 @@ docker compose exec app ragstack compare eval --eval-path /workspace/data/eval/q
 
 ```bash
 ragstack manual ingest [--source-dir PATH]
+ragstack manual backfill-metadata [--collection-name NAME] [--apply]
 ragstack manual ask "question"
 ragstack langchain ingest [--source-dir PATH]
+ragstack langchain backfill-metadata [--collection-name NAME] [--apply]
 ragstack langchain ask "question"
 ragstack compare eval [--eval-path PATH]
 ```
@@ -241,6 +254,7 @@ The app also exposes a FastAPI service.
 
 - `GET /api/health`: basic status + active default pipeline
 - `POST /api/query`: run RAG query on the pipeline selected by `DEFAULT_PIPELINE`
+- `POST /api/admin/qdrant/collections/{collection_name}/backfill?apply=false|true`: dry-run or apply metadata backfill before activation
 
 Request:
 
@@ -254,6 +268,7 @@ Response:
 
 ```json
 {
+  "schema_version": "2026-03-27",
   "pipeline": "manual",
   "question": "How does this stack stay portable?",
   "answer": "...",
@@ -321,6 +336,24 @@ Optional hybrid retrieval behavior:
 - retrieve semantic candidates (`SEMANTIC_TOP_N`)
 - score lexical candidates using BM25 (`BM25_TOP_N`)
 - fuse both lists with Reciprocal Rank Fusion (`RRF_K`)
+
+## Backfill Before Activation
+
+If a collection was indexed before metadata/fingerprint fields were introduced, run backfill first.
+
+CLI (dry run first, then apply):
+
+```bash
+ragstack manual backfill-metadata --collection-name rag_manual
+ragstack manual backfill-metadata --collection-name rag_manual --apply
+```
+
+API (dry run first, then apply):
+
+```text
+POST /api/admin/qdrant/collections/rag_manual/backfill?apply=false
+POST /api/admin/qdrant/collections/rag_manual/backfill?apply=true
+```
 
 ## Corpus And Evaluation Files
 

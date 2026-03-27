@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
 
 from ragstack.config import Settings
-from ragstack.models import AnswerResult, ChunkRecord, IngestionStats, LoadedDocument, RetrievedChunk
+from ragstack.models import AnswerResult, BackfillStats, ChunkRecord, IngestionStats, LoadedDocument, RetrievedChunk
 from ragstack.prompting import (
     INSUFFICIENT_CONTEXT_ANSWER,
     SYSTEM_PROMPT,
@@ -18,6 +19,7 @@ from ragstack.prompting import (
     has_sufficient_context,
 )
 from ragstack.qdrant_store import (
+    backfill_collection_metadata,
     create_qdrant_client,
     delete_document,
     ensure_collection,
@@ -49,6 +51,7 @@ class LangChainRagPipeline:
         self.embeddings = embeddings or build_langchain_embeddings(settings)
         self.chat_model = chat_model or build_langchain_chat_model(settings)
         self.reranker = reranker or build_reranker(settings)
+        self.embedding_fingerprint = settings.embedding_fingerprint()
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
@@ -99,6 +102,26 @@ class LangChainRagPipeline:
             skipped_files=skipped_files,
             indexed_chunks=indexed_chunks,
             deleted_documents=deleted_documents,
+        )
+
+    def backfill_metadata(self, *, dry_run: bool = True, collection_name: str | None = None) -> BackfillStats:
+        target_collection = collection_name or self.collection_name
+        result = backfill_collection_metadata(
+            self.client,
+            target_collection,
+            default_tenant_id=self.settings.default_tenant_id,
+            default_access_tags=[tag.strip() for tag in self.settings.default_access_tags.split(",") if tag.strip()],
+            embedding_fingerprint=self.embedding_fingerprint,
+            dry_run=dry_run,
+        )
+        return BackfillStats(
+            pipeline="langchain",
+            collection_name=target_collection,
+            total_points=int(result["total_points"]),
+            missing_points=int(result["missing_points"]),
+            updated_points=int(result["updated_points"]),
+            missing_field_counts=dict(result["missing_field_counts"]),
+            dry_run=bool(result["dry_run"]),
         )
 
     def ask(self, question: str) -> AnswerResult:
@@ -198,6 +221,11 @@ class LangChainRagPipeline:
                     "text": chunk.text,
                     "checksum": chunk.checksum,
                     "pipeline": "langchain",
+                    "tenant_id": self.settings.default_tenant_id,
+                    "doc_type": chunk.source_type,
+                    "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                    "access_tags": [tag.strip() for tag in self.settings.default_access_tags.split(",") if tag.strip()],
+                    "embedding_fingerprint": self.embedding_fingerprint,
                 },
             )
             for chunk in manual_chunks

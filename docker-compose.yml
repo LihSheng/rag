@@ -21,6 +21,17 @@ services:
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_COLLECTION_PREFIX: ${QDRANT_COLLECTION_PREFIX:-rag}
+      QDRANT_ACTIVE_ALIAS: ${QDRANT_ACTIVE_ALIAS:-rag_active}
+      API_SCHEMA_VERSION: ${API_SCHEMA_VERSION:-2026-03-27}
+      JWT_SECRET: ${JWT_SECRET:-dev_secret_key_change_me_32chars}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_EXP_HOURS: ${JWT_EXP_HOURS:-24}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-admin-password}
+      VIEWER_USERNAME: ${VIEWER_USERNAME:-}
+      VIEWER_PASSWORD: ${VIEWER_PASSWORD:-}
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
+      DEFAULT_ACCESS_TAGS: ${DEFAULT_ACCESS_TAGS:-internal}
       SOURCE_DIR: ${SOURCE_DIR:-/workspace/data/corpus}
       EVAL_PATH: ${EVAL_PATH:-/workspace/data/eval/questions.json}
       TOP_K: ${TOP_K:-5}
