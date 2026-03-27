@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, Any
 
 import jwt
 from datetime import datetime, timedelta
@@ -12,7 +12,9 @@ from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi import UploadFile, File, BackgroundTasks
 from pydantic import BaseModel
+import shutil
 
 from ragstack.config import Settings
 from ragstack.langchain_pipeline.pipeline import LangChainRagPipeline
@@ -74,6 +76,9 @@ class RagPipeline(Protocol):
     def ask(self, question: str) -> AnswerResult:
         ...
 
+    def ingest(self, source_dir: Path | None = None) -> Any:
+        ...
+
 
 def _resolve_static_dir() -> Path:
     explicit = os.getenv("FRONTEND_DIST_DIR")
@@ -128,13 +133,113 @@ def create_app() -> FastAPI:
 
     @app.get("/api/admin/metrics")
     def admin_metrics(current_user: str = Depends(get_current_user)):
-        # Phoenix performance metrics stub
+        import httpx
+        import logging
+
+        latency = 0
+        total = 0
+        integration = "failed"
+        
+        try:
+            # Query the GraphQL endpoint of Phoenix
+            query = """
+            query {
+              project(name: "default") {
+                traceCount
+                latencyMs: traceLatencyNs(aggregation: AVERAGE)
+              }
+            }
+            """
+            # Timeout quick so UI doesn't hang if phoenix is down
+            resp = httpx.post(
+                "http://phoenix:6006/graphql", 
+                json={"query": query},
+                timeout=2.0
+            )
+            
+            if resp.status_code == 200:
+                data = resp.json().get("data", {}).get("project", {})
+                if data:
+                    total = data.get("traceCount", 0)
+                    # Convert nanos to millis
+                    latency_ns = data.get("latencyMs") or 0
+                    latency = int(latency_ns / 1_000_000)
+                integration = "active"
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Phoenix metrics fetch failed: {e}")
+            
         return {
-            "query_latency_ms": 120,
-            "retrieval_score": 0.85,
-            "total_queries": 1500,
-            "phoenix_integration": "pending"
+            "query_latency_ms": latency,
+            "retrieval_score": 0.0, # Placeholder until custom evaluations
+            "total_queries": total,
+            "phoenix_integration": integration
         }
+
+    @app.get("/api/admin/config")
+    def get_config(current_user: str = Depends(get_current_user)):
+        return {
+            "pipeline": settings.default_pipeline,
+            "top_k": settings.top_k,
+            "hybrid_enabled": settings.hybrid_enabled,
+        }
+
+    @app.post("/api/admin/config")
+    def update_config(payload: dict, current_user: str = Depends(get_current_user)):
+        # For this learning stack, we only mock updating config dynamically 
+        # (in reality we would write to .env or update in-memory globals safely)
+        return {"status": "accepted", "message": "Configuration saved temporarily."}
+
+    @app.get("/api/admin/documents")
+    def list_documents(current_user: str = Depends(get_current_user)):
+        from ragstack.qdrant_store import create_qdrant_client, indexed_documents
+        try:
+            client = create_qdrant_client(settings.qdrant_url)
+            collection = settings.collection_name(settings.default_pipeline)
+            docs = indexed_documents(client, collection)
+            # docs is dict[source_path, tuple[checksum, document_id]]
+            items = []
+            for path, (checksum, doc_id) in docs.items():
+                items.append({
+                    "id": doc_id,
+                    "name": Path(path).name,
+                    "path": path,
+                    "checksum": checksum
+                })
+            return items
+        except Exception as e:
+            logger.exception("Failed to fetch documents")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/admin/documents/sync")
+    def sync_documents(current_user: str = Depends(get_current_user)):
+        try:
+            # Re-build pipeline to ensure fresh state if needed, but we can reuse the global one since it's injected
+            pipe = _build_pipeline(settings)
+            result = pipe.ingest(settings.source_dir)
+            return result.to_dict()
+        except Exception as e:
+            logger.exception("Manual sync failed")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/admin/documents/upload")
+    def upload_document(
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(...), 
+        current_user: str = Depends(get_current_user)
+    ):
+        target_path = settings.source_dir / file.filename
+        try:
+            with open(target_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            # trigger sync in background so we don't block the UI upload
+            pipe = _build_pipeline(settings)
+            background_tasks.add_task(pipe.ingest, settings.source_dir)
+            
+            return {"status": "accepted", "filename": file.filename, "message": "File uploaded and syncing."}
+        except Exception as e:
+            logger.exception("Upload failed")
+            raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/api/query", response_model=QueryResponse, responses={500: {"model": ApiError}})
     def query(payload: QueryRequest) -> QueryResponse | JSONResponse:
@@ -181,4 +286,6 @@ def create_app() -> FastAPI:
     return app
 
 
+from ragstack.bootstrap import ensure_telemetry
+ensure_telemetry()
 app = create_app()

@@ -8,7 +8,7 @@ SYSTEM_PROMPT = (
     "You answer questions only from the retrieved context. "
     "If the context is insufficient, reply exactly with: "
     f"{INSUFFICIENT_CONTEXT_ANSWER} "
-    "When you answer, cite the supporting chunk IDs in square brackets."
+    # "When you answer, cite the supporting chunk IDs in square brackets."
 )
 
 

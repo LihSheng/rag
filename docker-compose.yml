@@ -37,6 +37,7 @@ services:
       BOOTSTRAP_QDRANT_URL: http://qdrant:6333
       BOOTSTRAP_PULL_MODELS: ${BOOTSTRAP_PULL_MODELS:-true}
       BOOTSTRAP_WAIT_TIMEOUT: ${BOOTSTRAP_WAIT_TIMEOUT:-180}
+      PHOENIX_COLLECTOR_ENDPOINT: ${PHOENIX_COLLECTOR_ENDPOINT:-http://phoenix:4317}
     depends_on:
       - ollama
       - qdrant
@@ -57,6 +58,12 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_storage:/qdrant/storage
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+      - "4317:4317"
 
 volumes:
   ollama_models:

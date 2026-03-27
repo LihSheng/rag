@@ -26,6 +26,8 @@ from ragstack.retrieval import bm25_rank, rrf_fuse
 from ragstack.rerankers import Reranker, build_reranker
 from ragstack.text_utils import batched, chunk_text
 
+from opentelemetry import trace as otel_trace
+
 from .loaders import load_corpus_documents
 
 
@@ -130,7 +132,12 @@ class ManualRagPipeline:
         )
 
     def ask(self, question: str) -> AnswerResult:
-        query_vector = self.embedding_provider.embed_query(question)
+        tracer = otel_trace.get_tracer(__name__)
+        with tracer.start_as_current_span(
+            "ManualPipeline.retrieve",
+            attributes={"question": question, "openinference.span.kind": "RETRIEVER"}
+        ) as retrieve_span:
+            query_vector = self.embedding_provider.embed_query(question)
         final_limit = self.settings.top_k
         if self.reranker:
             final_limit = max(self.settings.rerank_top_n, self.settings.top_k)
@@ -177,7 +184,12 @@ class ManualRagPipeline:
                 insufficient_context=True,
             )
 
-        answer = self.chat_provider.generate_answer(build_rag_messages(question, citations))
+        with tracer.start_as_current_span(
+            "ManualPipeline.generate",
+            attributes={"openinference.span.kind": "LLM"}
+        ) as llm_span:
+            answer = self.chat_provider.generate_answer(build_rag_messages(question, citations))
+            
         answer = ensure_citation_markers(answer, citations)
         return AnswerResult(
             pipeline="manual",

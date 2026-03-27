@@ -1,14 +1,17 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { QueryResponse } from '../types';
 import { useAuth } from '../context/AuthContext';
 
 const SUGGESTED_QUERIES = [
-  'Understand our 2024 roadmap',
-  'Compare manual vs langchain implementations',
   'How does this stack stay portable?',
-  'What does reranking change in results?',
+  'Compare manual and langchain implementations.',
+  'What changes when reranking is enabled?',
+  'Where do citations come from in this workflow?',
 ];
+
+const DRAWER_STORAGE_KEY = 'rag:evidence-collapsed';
+const SNIPPET_LIMIT = 220;
 
 type ApiError = {
   error?: string;
@@ -18,14 +21,44 @@ type ApiError = {
 
 export default function Search() {
   const [query, setQuery] = useState('');
+  const [lastQuery, setLastQuery] = useState<string | null>(null);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isEvidenceCollapsed, setIsEvidenceCollapsed] = useState(true);
+  const [expandedCitations, setExpandedCitations] = useState<Set<string>>(new Set());
 
   const navigate = useNavigate();
   const { isAuthenticated } = useAuth();
 
+  useEffect(() => {
+    const stored = window.localStorage.getItem(DRAWER_STORAGE_KEY);
+    if (stored === 'false') {
+      setIsEvidenceCollapsed(false);
+    }
+  }, []);
+
   const canSubmit = useMemo(() => query.trim().length > 0 && !isLoading, [query, isLoading]);
+
+  const toggleEvidence = () => {
+    setIsEvidenceCollapsed((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(DRAWER_STORAGE_KEY, String(next));
+      return next;
+    });
+  };
+
+  const toggleCitation = (id: string) => {
+    setExpandedCitations((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   const runQuery = async (event: FormEvent) => {
     event.preventDefault();
@@ -37,6 +70,8 @@ export default function Search() {
 
     setIsLoading(true);
     setError(null);
+    setLastQuery(cleaned);
+    setExpandedCitations(new Set());
 
     try {
       const response = await fetch('/api/query', {
@@ -67,102 +102,124 @@ export default function Search() {
     <div className="page-shell">
       <nav className="top-nav">
         <div className="top-nav-inner">
-          <span className="brand">The Intelligent Layer</span>
-          <div className="top-links">
-            <span className="active">Search</span>
-            <a href="#">About</a>
-            <a href="#">Documentation</a>
-          </div>
-          <button 
-            className="action-pill" 
-            type="button" 
-            onClick={() => navigate(isAuthenticated ? '/admin' : '/login')}
-          >
+          <span className="brand">RAG Operator</span>
+          <button className="action-pill" type="button" onClick={() => navigate(isAuthenticated ? '/admin' : '/login')}>
             {isAuthenticated ? 'Admin Dashboard' : 'Sign In'}
           </button>
         </div>
       </nav>
 
-      <main className="content">
-        <section className="hero">
-          <span className="eyebrow">Editorial Intelligence v2.4</span>
-          <h1>
-            Ask your data
-            <br />
-            <span>anything.</span>
-          </h1>
+      <main className="query-layout">
+        <header className="query-header">
+          <p className="query-kicker">Single Query Workflow</p>
+          <h1>Ask once. Verify quickly.</h1>
           <p>
-            A high-fidelity RAG interface designed for clarity and deep retrieval. Treat your knowledge base with
-            the prestige it deserves.
+            Submit one query, read the grounded answer, then open evidence only when you need to validate retrieval quality.
           </p>
+        </header>
 
-          <form className="query-panel" onSubmit={runQuery}>
-            <span className="material-symbols-outlined">search</span>
-            <input
-              type="text"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search implementation guides or product roadmaps..."
-              aria-label="Query"
-            />
-            <button type="submit" disabled={!canSubmit}>
-              {isLoading ? 'Running...' : 'Query'}
-              <span className="material-symbols-outlined">arrow_forward</span>
+        <form className="composer" onSubmit={runQuery} aria-label="Query composer">
+          <input
+            type="text"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Ask about architecture, retrieval behavior, or corpus content..."
+            aria-label="Query"
+          />
+          <button type="submit" disabled={!canSubmit}>
+            {isLoading ? 'Retrieving...' : 'Send'}
+          </button>
+        </form>
+
+        <section className="suggestions" aria-label="Suggested queries">
+          {SUGGESTED_QUERIES.map((item) => (
+            <button key={item} className="suggestion-chip" type="button" onClick={() => setQuery(item)}>
+              {item}
             </button>
-          </form>
-
-          <section className="suggestions">
-            <div className="suggestions-title">Suggested Insights</div>
-            <div className="suggestion-grid">
-              {SUGGESTED_QUERIES.map((item) => (
-                <button key={item} className="suggestion-card" type="button" onClick={() => setQuery(item)}>
-                  <span>{item}</span>
-                  <span className="material-symbols-outlined">north_east</span>
-                </button>
-              ))}
-            </div>
-          </section>
+          ))}
         </section>
 
-        <section className="results">
-          <h2>Response</h2>
-          {error && <div className="error-box">{error}</div>}
-          {!error && result && (
-            <>
-              <div className="answer-box">
-                <div className="answer-meta">
-                  <span>Pipeline: {result.pipeline}</span>
-                  <span>{result.insufficient_context ? 'Insufficient context' : 'Grounded answer'}</span>
-                </div>
-                <p>{result.answer}</p>
+        <section className="chat-panel" aria-live="polite">
+          {lastQuery && (
+            <article className="message user-message">
+              <span className="message-label">You</span>
+              <p>{lastQuery}</p>
+            </article>
+          )}
+
+          {isLoading && (
+            <article className="message assistant-message loading-message">
+              <span className="message-label">Assistant</span>
+              <p>Retrieving context and generating response...</p>
+            </article>
+          )}
+
+          {error && (
+            <article className="message assistant-message error-message">
+              <span className="message-label">Assistant</span>
+              <p>{error}</p>
+            </article>
+          )}
+
+          {!isLoading && !error && result && (
+            <article className="message assistant-message">
+              <div className="assistant-head">
+                <span className="message-label">Assistant</span>
+                <span className={result.insufficient_context ? 'status-pill warning' : 'status-pill success'}>
+                  {result.insufficient_context ? 'Insufficient context' : 'Grounded answer'}
+                </span>
               </div>
 
-              <div className="citations-grid">
-                {result.citations.map((citation) => (
-                  <article className="citation-card" key={citation.chunk_id}>
-                    <header>
-                      <strong>{citation.chunk_id}</strong>
-                      <span>{citation.score.toFixed(4)}</span>
-                    </header>
-                    <p className="source-path">{citation.source_path}</p>
-                    <p className="source-meta">
-                      {citation.page ? `Page ${citation.page}` : 'No page'}
-                      {citation.section ? ` | ${citation.section}` : ''}
-                    </p>
-                    <p className="snippet">{citation.text}</p>
-                  </article>
-                ))}
-              </div>
-            </>
+              <p className="assistant-answer">{result.answer}</p>
+
+              <button className="drawer-toggle" type="button" onClick={toggleEvidence}>
+                {isEvidenceCollapsed ? 'Show evidence' : 'Hide evidence'}
+                <span className="drawer-meta">{result.citations.length} citations</span>
+              </button>
+
+              {!isEvidenceCollapsed && (
+                <div className="evidence-drawer">
+                  {result.citations.length === 0 && <p className="empty-evidence">No citations returned.</p>}
+                  {result.citations.map((citation) => {
+                    const isExpanded = expandedCitations.has(citation.chunk_id);
+                    const shouldTruncate = citation.text.length > SNIPPET_LIMIT;
+                    const visibleText = isExpanded || !shouldTruncate
+                      ? citation.text
+                      : `${citation.text.slice(0, SNIPPET_LIMIT)}...`;
+
+                    return (
+                      <article className="evidence-item" key={citation.chunk_id}>
+                        <header>
+                          <strong>{citation.chunk_id}</strong>
+                          <span>{citation.score.toFixed(4)}</span>
+                        </header>
+                        <p className="evidence-path">{citation.source_path}</p>
+                        <p className="evidence-meta">
+                          {citation.page ? `Page ${citation.page}` : 'No page'}
+                          {citation.section ? ` | ${citation.section}` : ''}
+                        </p>
+                        <p className="evidence-text">{visibleText}</p>
+                        {shouldTruncate && (
+                          <button type="button" className="expand-link" onClick={() => toggleCitation(citation.chunk_id)}>
+                            {isExpanded ? 'Show less' : 'Show more'}
+                          </button>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </article>
           )}
-          {!error && !result && <p className="placeholder">Run a query to retrieve grounded context and generated output.</p>}
+
+          {!lastQuery && !isLoading && !error && !result && (
+            <article className="message assistant-message empty-message">
+              <span className="message-label">Assistant</span>
+              <p>Start with one question. You will get one response with optional evidence details.</p>
+            </article>
+          )}
         </section>
       </main>
-
-      <footer className="footer">
-        <span>The Intelligent Layer</span>
-        <small>Secured via RAG Intelligence</small>
-      </footer>
     </div>
   );
 }

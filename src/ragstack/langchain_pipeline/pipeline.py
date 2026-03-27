@@ -30,6 +30,7 @@ from ragstack.manual.loaders import load_corpus_documents
 from ragstack.manual.pipeline import chunk_loaded_document
 
 from .runtime import build_langchain_chat_model, build_langchain_embeddings, extract_response_text
+from openinference.instrumentation.langchain import LangChainInstrumentor
 
 
 class LangChainRagPipeline:
@@ -52,6 +53,10 @@ class LangChainRagPipeline:
             chunk_overlap=settings.chunk_overlap,
             separators=["\n\n", "\n", ". ", "? ", "! ", " "],
         )
+        try:
+            LangChainInstrumentor().instrument()
+        except Exception:
+            pass
 
     def ingest(self, source_dir: Path | None = None) -> IngestionStats:
         source_dir = source_dir or self.settings.source_dir

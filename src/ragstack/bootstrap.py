@@ -3,6 +3,13 @@ from __future__ import annotations
 import time
 
 import httpx
+import os
+
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
 
 from ragstack.config import Settings
 
@@ -32,6 +39,26 @@ def _pull_model(ollama_url: str, model: str) -> None:
         timeout=None,
     )
     response.raise_for_status()
+
+
+def ensure_telemetry() -> None:
+    endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT")
+    if not endpoint:
+        return
+        
+    try:
+        from opentelemetry import trace
+        # Only configure once
+        provider = trace.get_tracer_provider()
+        if not isinstance(provider, TracerProvider):
+            resource = Resource(attributes={"service.name": "ragstack"})
+            provider = TracerProvider(resource=resource)
+            exporter = OTLPSpanExporter(endpoint=endpoint)
+            # Use SimpleSpanProcessor for immediate visibility or BatchSpanProcessor for production
+            provider.add_span_processor(BatchSpanProcessor(exporter))
+            trace.set_tracer_provider(provider)
+    except Exception as e:
+        print(f"Failed to initialize OpenTelemetry: {e}")
 
 
 def main() -> int:

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
@@ -10,8 +10,8 @@ export default function Login() {
   const navigate = useNavigate();
   const { login } = useAuth();
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
     setIsLoading(true);
     setError(null);
 
@@ -37,37 +37,42 @@ export default function Login() {
   };
 
   return (
-    <div className="page-shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <main className="content" style={{ maxWidth: '400px', width: '100%', marginTop: '50px' }}>
-        <section className="results" style={{ padding: '2rem', background: '#1c1c1c', borderRadius: '12px', color: '#ffffff' }}>
-          <h2 style={{ color: '#ffffff', margin: '0 0 1rem 0' }}>Admin Login</h2>
+    <div className='login-shell'>
+      <main className='login-main'>
+        <section className='login-card'>
+          <p className='query-kicker'>Operator Access</p>
+          <h2>Admin Login</h2>
           {error && <div className="error-box">{error}</div>}
-          
-          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
-            <div>
-              <label>Username</label>
-              <input 
-                type="text" 
-                value={username} 
-                onChange={e => setUsername(e.target.value)} 
-                style={{ width: '100%', padding: '0.8rem', marginTop: '0.5rem', background: '#2a2a2a', border: '1px solid #333', color: '#fff', borderRadius: '4px' }}
-                required 
+
+          <form onSubmit={handleLogin} className='login-form'>
+            <label>
+              <span>Username</span>
+              <input
+                type='text'
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                required
               />
-            </div>
-            <div>
-              <label>Password</label>
-              <input 
-                type="password" 
-                value={password} 
-                onChange={e => setPassword(e.target.value)} 
-                style={{ width: '100%', padding: '0.8rem', marginTop: '0.5rem', background: '#2a2a2a', border: '1px solid #333', color: '#fff', borderRadius: '4px' }}
-                required 
+            </label>
+
+            <label>
+              <span>Password</span>
+              <input
+                type='password'
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
               />
-            </div>
-            <button type="submit" disabled={isLoading} className="action-pill" style={{ marginTop: '1rem', width: '100%', justifyContent: 'center', background: '#3b82f6', color: '#fff' }}>
+            </label>
+
+            <button type='submit' disabled={isLoading} className='action-pill login-submit'>
               {isLoading ? 'Authenticating...' : 'Sign In'}
             </button>
           </form>
+
+          <button type='button' className='login-back' onClick={() => navigate('/')}>
+            Back to Search
+          </button>
         </section>
       </main>
     </div>
