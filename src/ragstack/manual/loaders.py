@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
 import re
+import zipfile
 from pathlib import Path
+from xml.etree import ElementTree
 
 from pypdf import PdfReader
 
@@ -17,6 +20,10 @@ def load_corpus_documents(source_dir: Path) -> list[LoadedDocument]:
         suffix = path.suffix.lower()
         if suffix in {".md", ".markdown"}:
             documents.append(_load_markdown_document(path, source_dir))
+        elif suffix == ".txt":
+            documents.append(_load_text_document(path, source_dir))
+        elif suffix == ".docx":
+            documents.append(_load_docx_document(path, source_dir))
         elif suffix == ".pdf":
             documents.append(_load_pdf_document(path, source_dir))
 
@@ -95,3 +102,52 @@ def _load_pdf_document(path: Path, source_dir: Path) -> LoadedDocument:
         segments=segments,
     )
 
+
+def _load_text_document(path: Path, source_dir: Path) -> LoadedDocument:
+    raw_text = path.read_text(encoding="utf-8")
+    relative_path = path.relative_to(source_dir).as_posix()
+    checksum = sha256_bytes(path.read_bytes())
+    normalized = normalize_text(raw_text)
+    segments: list[SourceSegment] = []
+    if normalized:
+        segments.append(SourceSegment(text=normalized))
+
+    return LoadedDocument(
+        document_id=stable_document_id(relative_path),
+        source_path=relative_path,
+        source_type="text",
+        checksum=checksum,
+        segments=segments,
+    )
+
+
+def _load_docx_document(path: Path, source_dir: Path) -> LoadedDocument:
+    bytes_blob = path.read_bytes()
+    raw_text = _extract_docx_text(bytes_blob)
+    relative_path = path.relative_to(source_dir).as_posix()
+    checksum = sha256_bytes(bytes_blob)
+    normalized = normalize_text(raw_text)
+    segments: list[SourceSegment] = []
+    if normalized:
+        segments.append(SourceSegment(text=normalized))
+
+    return LoadedDocument(
+        document_id=stable_document_id(relative_path),
+        source_path=relative_path,
+        source_type="docx",
+        checksum=checksum,
+        segments=segments,
+    )
+
+
+def _extract_docx_text(blob: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        data = archive.read("word/document.xml")
+    root = ElementTree.fromstring(data)
+    namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    lines: list[str] = []
+    for paragraph in root.findall(".//w:p", namespace):
+        runs = [node.text for node in paragraph.findall(".//w:t", namespace) if node.text]
+        if runs:
+            lines.append("".join(runs))
+    return "\n".join(lines)

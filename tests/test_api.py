@@ -141,3 +141,127 @@ def test_admin_collections_normalizes_count_shapes(monkeypatch) -> None:
         {"name": "alpha", "vectors_count": 5, "points_count": 5, "is_active": True},
         {"name": "beta", "vectors_count": 0, "points_count": 3, "is_active": False},
     ]
+
+
+def test_admin_collection_ingest_upload(monkeypatch, tmp_path) -> None:
+    records: list[dict[str, object]] = []
+
+    class FakeStats:
+        indexed_files = 1
+        indexed_chunks = 2
+        skipped_files = 0
+
+    class FakePipelineForIngest:
+        def ask(self, question: str) -> AnswerResult:
+            del question
+            return FakePipeline("manual").ask("noop")
+
+        def ingest(self, source_dir=None, collection_name=None):  # type: ignore[no-untyped-def]
+            del collection_name
+            files = list(source_dir.iterdir()) if source_dir is not None else []
+            assert any(path.name == "sample.md" for path in files)
+            return FakeStats()
+
+    class FakeQdrantClient:
+        def collection_exists(self, name: str) -> bool:
+            return name == "alpha"
+
+        def get_collections(self):  # type: ignore[no-untyped-def]
+            return type("CollectionList", (), {"collections": []})()
+
+        def get_aliases(self):  # type: ignore[no-untyped-def]
+            return type("AliasList", (), {"aliases": []})()
+
+    class FakeOpsLogStore:
+        def record(self, *, action: str, target: str, actor: str, status: str, detail: str | None = None) -> None:
+            records.append(
+                {"action": action, "target": target, "actor": actor, "status": status, "detail": detail}
+            )
+
+        def recent(self, limit: int = 50) -> list[dict[str, object]]:
+            del limit
+            return []
+
+    monkeypatch.setattr(api_module, "_build_pipeline", lambda settings: FakePipelineForIngest())
+    monkeypatch.setattr(api_module, "create_qdrant_client", lambda url: FakeQdrantClient())
+    monkeypatch.setattr(
+        api_module.OpsLogStore,
+        "from_data_dir",
+        classmethod(lambda cls, data_dir: FakeOpsLogStore()),
+    )
+    monkeypatch.setenv("SOURCE_DIR", str(tmp_path / "corpus"))
+
+    client = TestClient(api_module.create_app())
+
+    login_response = client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+    token = login_response.json()["access_token"]
+    response = client.post(
+        "/api/admin/qdrant/collections/alpha/ingest",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("sample.md", b"# demo content", "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "accepted"
+    statuses = [str(record["status"]) for record in records if record["action"] == "collection:ingest"]
+    assert "queued" in statuses
+    assert "running" in statuses
+    assert "completed" in statuses
+
+
+def test_admin_collection_ingest_accepts_docx(monkeypatch, tmp_path) -> None:
+    class FakeStats:
+        indexed_files = 1
+        indexed_chunks = 1
+        skipped_files = 0
+
+    class FakePipelineForIngest:
+        def ask(self, question: str) -> AnswerResult:
+            del question
+            return FakePipeline("manual").ask("noop")
+
+        def ingest(self, source_dir=None, collection_name=None):  # type: ignore[no-untyped-def]
+            del collection_name
+            files = list(source_dir.iterdir()) if source_dir is not None else []
+            assert any(path.suffix == ".docx" for path in files)
+            return FakeStats()
+
+    class FakeQdrantClient:
+        def collection_exists(self, name: str) -> bool:
+            return name == "alpha"
+
+        def get_collections(self):  # type: ignore[no-untyped-def]
+            return type("CollectionList", (), {"collections": []})()
+
+        def get_aliases(self):  # type: ignore[no-untyped-def]
+            return type("AliasList", (), {"aliases": []})()
+
+    class FakeOpsLogStore:
+        def record(self, *, action: str, target: str, actor: str, status: str, detail: str | None = None) -> None:
+            del action, target, actor, status, detail
+
+        def recent(self, limit: int = 50) -> list[dict[str, object]]:
+            del limit
+            return []
+
+    monkeypatch.setattr(api_module, "_build_pipeline", lambda settings: FakePipelineForIngest())
+    monkeypatch.setattr(api_module, "create_qdrant_client", lambda url: FakeQdrantClient())
+    monkeypatch.setattr(
+        api_module.OpsLogStore,
+        "from_data_dir",
+        classmethod(lambda cls, data_dir: FakeOpsLogStore()),
+    )
+    monkeypatch.setenv("SOURCE_DIR", str(tmp_path / "corpus"))
+
+    client = TestClient(api_module.create_app())
+    login_response = client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+    token = login_response.json()["access_token"]
+
+    response = client.post(
+        "/api/admin/qdrant/collections/alpha/ingest",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("sample.docx", b"fake docx bytes", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "accepted"

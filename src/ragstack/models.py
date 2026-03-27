@@ -31,12 +31,10 @@ class ChunkRecord:
     text: str
     page: int | None = None
     section: str | None = None
-    family_id: str | None = None
-    version_id: str | None = None
     is_active: bool = True
 
     def payload(self) -> dict[str, Any]:
-        payload = {
+        return {
             "document_id": self.document_id,
             "chunk_id": self.chunk_id,
             "source_path": self.source_path,
@@ -48,11 +46,6 @@ class ChunkRecord:
             "pipeline": self.pipeline,
             "is_active": self.is_active,
         }
-        if self.family_id:
-            payload["family_id"] = self.family_id
-        if self.version_id:
-            payload["version_id"] = self.version_id
-        return payload
 
 
 @dataclass(frozen=True)

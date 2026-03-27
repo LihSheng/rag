@@ -30,8 +30,6 @@ def ensure_collection(client: QdrantClient, collection_name: str, vector_size: i
     _create_payload_index(client, collection_name, "source_type", models.PayloadSchemaType.KEYWORD)
     _create_payload_index(client, collection_name, "checksum", models.PayloadSchemaType.KEYWORD)
     _create_payload_index(client, collection_name, "pipeline", models.PayloadSchemaType.KEYWORD)
-    _create_payload_index(client, collection_name, "family_id", models.PayloadSchemaType.KEYWORD)
-    _create_payload_index(client, collection_name, "version_id", models.PayloadSchemaType.KEYWORD)
     _create_payload_index(client, collection_name, "is_active", models.PayloadSchemaType.BOOL)
 
 

@@ -59,10 +59,11 @@ class LangChainRagPipeline:
         except Exception:
             pass
 
-    def ingest(self, source_dir: Path | None = None) -> IngestionStats:
+    def ingest(self, source_dir: Path | None = None, collection_name: str | None = None) -> IngestionStats:
         source_dir = source_dir or self.settings.source_dir
+        target_collection = collection_name or self.collection_name
         documents = load_corpus_documents(source_dir)
-        known_documents = indexed_documents(self.client, self.collection_name)
+        known_documents = indexed_documents(self.client, target_collection)
 
         deleted_documents = 0
         skipped_files = 0
@@ -70,8 +71,8 @@ class LangChainRagPipeline:
         indexed_chunks = 0
 
         vector_size = len(self.embeddings.embed_query("dimension probe"))
-        ensure_collection(self.client, self.collection_name, vector_size)
-        vector_store = self._vector_store()
+        ensure_collection(self.client, target_collection, vector_size)
+        vector_store = self._vector_store(collection_name=target_collection)
 
         for document in documents:
             existing = known_documents.get(document.source_path)
@@ -80,7 +81,7 @@ class LangChainRagPipeline:
                 continue
 
             if existing:
-                delete_document(self.client, self.collection_name, existing[1])
+                delete_document(self.client, target_collection, existing[1])
                 deleted_documents += 1
 
             langchain_docs, ids = self._build_langchain_documents(document)

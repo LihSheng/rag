@@ -76,10 +76,11 @@ class ManualRagPipeline:
         self.reranker = reranker or build_reranker(settings)
         self.client = qdrant_client or create_qdrant_client(settings.qdrant_url)
 
-    def ingest(self, source_dir: Path | None = None) -> IngestionStats:
+    def ingest(self, source_dir: Path | None = None, collection_name: str | None = None) -> IngestionStats:
         source_dir = source_dir or self.settings.source_dir
+        target_collection = collection_name or self.collection_name
         documents = load_corpus_documents(source_dir)
-        known_documents = indexed_documents(self.client, self.collection_name)
+        known_documents = indexed_documents(self.client, target_collection)
 
         documents_to_index: list[LoadedDocument] = []
         deleted_documents = 0
@@ -92,7 +93,7 @@ class ManualRagPipeline:
                 continue
 
             if existing:
-                delete_document(self.client, self.collection_name, existing[1])
+                delete_document(self.client, target_collection, existing[1])
                 deleted_documents += 1
 
             documents_to_index.append(document)
@@ -110,11 +111,11 @@ class ManualRagPipeline:
 
         if chunk_buffer:
             vector_size = len(self.embedding_provider.embed_query("dimension probe"))
-            ensure_collection(self.client, self.collection_name, vector_size)
+            ensure_collection(self.client, target_collection, vector_size)
 
             for chunk_batch in batched(chunk_buffer, 32):
                 vectors = self.embedding_provider.embed_documents([chunk.text for chunk in chunk_batch])
-                upsert_chunk_batch(self.client, self.collection_name, chunk_batch, vectors)
+                upsert_chunk_batch(self.client, target_collection, chunk_batch, vectors)
 
         indexed_files = sum(
             1

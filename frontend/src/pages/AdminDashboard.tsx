@@ -112,6 +112,9 @@ export default function AdminDashboard() {
   const [operations, setOperations] = useState<OperationItem[]>([]);
   const [new_collection_name, setNewCollectionName] = useState('');
   const [new_vector_size, setNewVectorSize] = useState(384);
+  const [ingest_collection_name, setIngestCollectionName] = useState('');
+  const [ingest_file, setIngestFile] = useState<File | null>(null);
+  const [is_ingesting, setIsIngesting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [active_module, setActiveModule] = useState<AdminModule>('overview');
   const [is_nav_compact, setIsNavCompact] = useState(false);
@@ -175,6 +178,17 @@ export default function AdminDashboard() {
       setIsMobileNavOpen(false);
     }
   }, [is_mobile, active_module]);
+
+  useEffect(() => {
+    const collections = datasets_payload?.collections || [];
+    if (collections.length === 0) {
+      setIngestCollectionName('');
+      return;
+    }
+    if (!collections.some((item) => item.name === ingest_collection_name)) {
+      setIngestCollectionName(collections[0].name);
+    }
+  }, [datasets_payload, ingest_collection_name]);
 
   const handleLogout = () => {
     logout();
@@ -253,6 +267,45 @@ export default function AdminDashboard() {
       setNotice({ tone: 'success', message: `${name} deleted.` });
     } catch (error) {
       setNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Delete failed.' });
+    }
+  };
+
+  const handleIngestFile = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!ingest_collection_name) {
+      setNotice({ tone: 'error', message: 'Select a dataset first.' });
+      return;
+    }
+    if (!ingest_file) {
+      setNotice({ tone: 'error', message: 'Choose a file to ingest.' });
+      return;
+    }
+
+    setIsIngesting(true);
+    try {
+      const form_data = new FormData();
+      form_data.append('file', ingest_file);
+      const response = await fetch(`/api/admin/qdrant/collections/${encodeURIComponent(ingest_collection_name)}/ingest`, {
+        method: 'POST',
+        headers: auth_headers,
+        body: form_data,
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail || 'Ingest request failed.');
+      }
+
+      setNotice({ tone: 'success', message: `Ingest queued for ${ingest_file.name} -> ${ingest_collection_name}.` });
+      setIngestFile(null);
+      await refreshDatasets();
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await waitMs(1500);
+        await refreshDatasets();
+      }
+    } catch (error) {
+      setNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Ingest request failed.' });
+    } finally {
+      setIsIngesting(false);
     }
   };
 
@@ -399,7 +452,37 @@ export default function AdminDashboard() {
                   <Typography variant='h6' sx={{ mt: 0.5 }}>Active: {datasets_payload?.active_collection || 'None'}</Typography>
                 </CardContent>
               </Card>
-
+              <Card>
+                <CardContent>
+                  <Stack component='form' direction={{ xs: 'column', md: 'row' }} spacing={1.25} onSubmit={handleIngestFile}>
+                    <FormControl size='small' fullWidth>
+                      <InputLabel id='ingest-collection-label'>Target dataset</InputLabel>
+                      <Select
+                        labelId='ingest-collection-label'
+                        label='Target dataset'
+                        value={ingest_collection_name}
+                        onChange={(event) => setIngestCollectionName(event.target.value)}
+                      >
+                        {(datasets_payload?.collections || []).map((item) => (
+                          <MenuItem key={item.name} value={item.name}>{item.name}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <Button variant='outlined' component='label'>
+                      {ingest_file ? ingest_file.name : 'Choose file'}
+                      <input
+                        type='file'
+                        hidden
+                        accept='.md,.markdown,.pdf,.txt,.docx'
+                        onChange={(event) => setIngestFile(event.target.files?.[0] || null)}
+                      />
+                    </Button>
+                    <Button type='submit' variant='contained' disabled={is_ingesting || !ingest_collection_name || !ingest_file}>
+                      {is_ingesting ? 'Queuing...' : 'Add Data'}
+                    </Button>
+                  </Stack>
+                </CardContent>
+              </Card>
               <Card>
                 <CardContent>
                   <TableContainer>
@@ -433,7 +516,6 @@ export default function AdminDashboard() {
                   </TableContainer>
                 </CardContent>
               </Card>
-
               <Card>
                 <CardContent>
                   <Typography variant='h6'>Recent Operations</Typography>
@@ -465,7 +547,6 @@ export default function AdminDashboard() {
               </Card>
             </Stack>
           )}
-
           {active_module === 'phoenix' && (
             <Card sx={{ mt: 1 }}>
               <CardContent>
@@ -478,7 +559,6 @@ export default function AdminDashboard() {
               </CardContent>
             </Card>
           )}
-
           {active_module === 'config' && (
             <Card sx={{ mt: 1 }}>
               <CardContent>
@@ -527,6 +607,12 @@ function coerceCount(value: unknown): number {
     return Object.values(value as Record<string, unknown>).reduce((total, item) => total + coerceCount(item), 0);
   }
   return 0;
+}
+
+function waitMs(duration: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, duration);
+  });
 }
 
 function moduleTitle(module: AdminModule) {

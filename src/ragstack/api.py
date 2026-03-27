@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
 import jwt
 from qdrant_client import models as qdrant_models
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer
@@ -122,7 +124,7 @@ class RagPipeline(Protocol):
     def ask(self, question: str) -> AnswerResult:
         ...
 
-    def ingest(self, source_dir: Path | None = None) -> Any:
+    def ingest(self, source_dir: Path | None = None, collection_name: str | None = None) -> Any:
         ...
 
 
@@ -165,6 +167,45 @@ def create_app() -> FastAPI:
         except Exception:
             return None
         return None
+
+    def _ingest_uploaded_file(
+        *,
+        upload_dir: Path,
+        collection_name: str,
+        actor: str,
+        original_name: str,
+    ) -> None:
+        ops_log.record(
+            action="collection:ingest",
+            target=collection_name,
+            actor=actor,
+            status="running",
+            detail=original_name,
+        )
+        try:
+            ingest_pipeline = _build_pipeline(settings)
+            stats = ingest_pipeline.ingest(source_dir=upload_dir, collection_name=collection_name)
+            ops_log.record(
+                action="collection:ingest",
+                target=collection_name,
+                actor=actor,
+                status="completed",
+                detail=(
+                    f"{original_name} indexed_files={stats.indexed_files} "
+                    f"indexed_chunks={stats.indexed_chunks} skipped_files={stats.skipped_files}"
+                ),
+            )
+        except Exception as exc:
+            logger.exception("Collection ingest failed for %s", collection_name)
+            ops_log.record(
+                action="collection:ingest",
+                target=collection_name,
+                actor=actor,
+                status="failed",
+                detail=f"{original_name}: {exc}",
+            )
+        finally:
+            shutil.rmtree(upload_dir, ignore_errors=True)
 
     @app.get('/api/health')
     def health() -> dict[str, str]:
@@ -263,7 +304,6 @@ def create_app() -> FastAPI:
                     "is_active": item.name == active_name,
                 }
             )
-        ops_log.record(action="collections:list", target="*", actor=current_user, status="completed")
         return {"alias": settings.qdrant_active_alias, "active_collection": active_name, "collections": items}
 
     @app.post('/api/admin/qdrant/collections')
@@ -343,9 +383,55 @@ def create_app() -> FastAPI:
         ops_log.record(action="collection:delete", target=collection_name, actor=current_user, status="completed")
         return {"status": "ok", "message": f"Collection {collection_name} deleted."}
 
+    @app.post('/api/admin/qdrant/collections/{collection_name}/ingest')
+    async def ingest_collection_file(
+        collection_name: str,
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(...),
+        current_user: str = Depends(get_current_user),
+    ) -> dict[str, str]:
+        client = create_qdrant_client(settings.qdrant_url)
+        if not client.collection_exists(collection_name):
+            raise HTTPException(status_code=404, detail="Collection not found")
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Filename is required")
+
+        original_name = Path(file.filename).name
+        extension = Path(original_name).suffix.lower()
+        allowed_extensions = {".md", ".markdown", ".pdf", ".txt", ".docx"}
+        if extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type. Allowed: .md, .markdown, .pdf, .txt, .docx",
+            )
+
+        upload_root = Path(tempfile.mkdtemp(prefix="rag-admin-ingest-"))
+        target_file = upload_root / original_name
+        try:
+            content = await file.read()
+            target_file.write_bytes(content)
+        finally:
+            await file.close()
+
+        ops_log.record(
+            action="collection:ingest",
+            target=collection_name,
+            actor=current_user,
+            status="queued",
+            detail=original_name,
+        )
+        background_tasks.add_task(
+            _ingest_uploaded_file,
+            upload_dir=upload_root,
+            collection_name=collection_name,
+            actor=current_user,
+            original_name=original_name,
+        )
+        return {"status": "accepted", "message": f"Ingest queued for {original_name}."}
+
     @app.get('/api/admin/qdrant/operations')
     def list_admin_operations(current_user: str = Depends(get_current_user)) -> list[dict[str, Any]]:
-        ops_log.record(action="operations:list", target="*", actor=current_user, status="completed")
+        del current_user
         return ops_log.recent(limit=80)
 
     @app.post('/api/query', response_model=QueryResponse, responses={500: {'model': ApiError}})
