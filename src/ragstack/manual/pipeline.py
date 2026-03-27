@@ -20,12 +20,12 @@ from ragstack.qdrant_store import (
     indexed_documents,
     list_chunks,
     query_similar_chunks,
+    resolve_query_collection,
     upsert_chunk_batch,
 )
 from ragstack.retrieval import bm25_rank, rrf_fuse
 from ragstack.rerankers import Reranker, build_reranker
 from ragstack.text_utils import batched, chunk_text
-
 from opentelemetry import trace as otel_trace
 
 from .loaders import load_corpus_documents
@@ -138,6 +138,11 @@ class ManualRagPipeline:
             attributes={"question": question, "openinference.span.kind": "RETRIEVER"}
         ) as retrieve_span:
             query_vector = self.embedding_provider.embed_query(question)
+        active_collection = resolve_query_collection(
+            self.client,
+            preferred_collection=self.settings.qdrant_active_alias,
+            fallback_collection=self.collection_name,
+        )
         final_limit = self.settings.top_k
         if self.reranker:
             final_limit = max(self.settings.rerank_top_n, self.settings.top_k)
@@ -148,13 +153,13 @@ class ManualRagPipeline:
 
         semantic_candidates = query_similar_chunks(
             self.client,
-            self.collection_name,
+            active_collection,
             query_vector=query_vector,
             limit=semantic_limit,
         )
         candidates = semantic_candidates
         if self.settings.hybrid_enabled:
-            lexical_pool = list_chunks(self.client, self.collection_name)
+            lexical_pool = list_chunks(self.client, active_collection)
             lexical_limit = max(self.settings.bm25_top_n, final_limit)
             lexical_candidates = bm25_rank(
                 question=question,

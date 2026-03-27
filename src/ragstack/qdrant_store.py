@@ -30,6 +30,9 @@ def ensure_collection(client: QdrantClient, collection_name: str, vector_size: i
     _create_payload_index(client, collection_name, "source_type", models.PayloadSchemaType.KEYWORD)
     _create_payload_index(client, collection_name, "checksum", models.PayloadSchemaType.KEYWORD)
     _create_payload_index(client, collection_name, "pipeline", models.PayloadSchemaType.KEYWORD)
+    _create_payload_index(client, collection_name, "family_id", models.PayloadSchemaType.KEYWORD)
+    _create_payload_index(client, collection_name, "version_id", models.PayloadSchemaType.KEYWORD)
+    _create_payload_index(client, collection_name, "is_active", models.PayloadSchemaType.BOOL)
 
 
 def _create_payload_index(
@@ -78,7 +81,12 @@ def indexed_documents(client: QdrantClient, collection_name: str) -> dict[str, t
     return results
 
 
-def delete_document(client: QdrantClient, collection_name: str, document_id: str) -> None:
+def delete_document(
+    client: QdrantClient,
+    collection_name: str,
+    document_id: str,
+    payload_key: str = "document_id",
+) -> None:
     if not client.collection_exists(collection_name):
         return
 
@@ -87,7 +95,7 @@ def delete_document(client: QdrantClient, collection_name: str, document_id: str
         points_selector=models.Filter(
             must=[
                 models.FieldCondition(
-                    key="document_id",
+                    key=payload_key,
                     match=models.MatchValue(value=document_id),
                 )
             ]
@@ -127,6 +135,14 @@ def query_similar_chunks(
         collection_name=collection_name,
         query=query_vector,
         limit=limit,
+        query_filter=models.Filter(
+            must_not=[
+                models.FieldCondition(
+                    key="is_active",
+                    match=models.MatchValue(value=False),
+                )
+            ]
+        ),
         with_payload=True,
         with_vectors=False,
     )
@@ -165,6 +181,14 @@ def list_chunks(client: QdrantClient, collection_name: str) -> list[RetrievedChu
             collection_name=collection_name,
             offset=offset,
             limit=256,
+            scroll_filter=models.Filter(
+                must_not=[
+                    models.FieldCondition(
+                        key="is_active",
+                        match=models.MatchValue(value=False),
+                    )
+                ]
+            ),
             with_payload=True,
             with_vectors=False,
         )
@@ -194,6 +218,18 @@ def list_chunks(client: QdrantClient, collection_name: str) -> list[RetrievedChu
 
 def qdrant_point_id(value: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, value))
+
+
+def resolve_query_collection(
+    client: QdrantClient,
+    preferred_collection: str,
+    fallback_collection: str,
+) -> str:
+    if client.collection_exists(preferred_collection):
+        return preferred_collection
+    return fallback_collection
+
+
 
 
 def _optional_int(value: Any) -> int | None:

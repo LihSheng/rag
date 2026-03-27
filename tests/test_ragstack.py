@@ -76,6 +76,7 @@ def make_settings(
         embed_model="nomic-embed-text",
         qdrant_url=":memory:",
         qdrant_collection_prefix="rag",
+        qdrant_active_alias="rag_active",
         source_dir=FIXTURE_ROOT / "data" / "corpus",
         eval_path=FIXTURE_ROOT / "data" / "eval" / "questions.json",
         chunk_size=1000,

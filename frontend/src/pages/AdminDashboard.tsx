@@ -1,5 +1,47 @@
-import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  Alert,
+  AppBar,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  Drawer,
+  FormControl,
+  FormControlLabel,
+  FormLabel,
+  Grid,
+  IconButton,
+  InputLabel,
+  List,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  MenuItem,
+  Radio,
+  RadioGroup,
+  Select,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TextField,
+  Toolbar,
+  Typography,
+  useMediaQuery,
+} from '@mui/material';
+import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
+import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
+import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
+import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
+import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
+import MenuOutlinedIcon from '@mui/icons-material/MenuOutlined';
+import MenuOpenOutlinedIcon from '@mui/icons-material/MenuOpenOutlined';
 import { useAuth } from '../context/AuthContext';
 
 type SystemHealth = {
@@ -17,11 +59,27 @@ type PhoenixMetrics = {
   phoenix_integration: string;
 };
 
-type DocumentItem = {
-  id: string;
+type DatasetItem = {
   name: string;
-  path: string;
-  checksum: string;
+  vectors_count: number | Record<string, unknown> | null;
+  points_count: number | Record<string, unknown> | null;
+  is_active: boolean;
+};
+
+type QdrantCollectionsResponse = {
+  alias: string;
+  active_collection: string | null;
+  collections: DatasetItem[];
+};
+
+type OperationItem = {
+  id: number;
+  action: string;
+  target: string;
+  actor: string;
+  status: string;
+  detail: string | null;
+  created_at: string;
 };
 
 type RAGConfig = {
@@ -30,7 +88,7 @@ type RAGConfig = {
   hybrid_enabled: boolean;
 };
 
-type AdminModule = 'overview' | 'documents' | 'phoenix' | 'config';
+type AdminModule = 'overview' | 'datasets' | 'phoenix' | 'config';
 
 type NoticeTone = 'success' | 'error' | 'info';
 
@@ -39,20 +97,42 @@ type NoticeState = {
   message: string;
 } | null;
 
+const SIDEBAR_WIDTH = 250;
+const SIDEBAR_COMPACT_WIDTH = 72;
+
 export default function AdminDashboard() {
   const { token, logout, isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const is_mobile = useMediaQuery('(max-width:768px)');
 
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [metrics, setMetrics] = useState<PhoenixMetrics | null>(null);
-  const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [config, setConfig] = useState<RAGConfig | null>(null);
+  const [datasets_payload, setDatasetsPayload] = useState<QdrantCollectionsResponse | null>(null);
+  const [operations, setOperations] = useState<OperationItem[]>([]);
+  const [new_collection_name, setNewCollectionName] = useState('');
+  const [new_vector_size, setNewVectorSize] = useState(384);
   const [loading, setLoading] = useState(true);
   const [active_module, setActiveModule] = useState<AdminModule>('overview');
   const [is_nav_compact, setIsNavCompact] = useState(false);
-  const [is_syncing, setIsSyncing] = useState(false);
-  const [is_uploading, setIsUploading] = useState(false);
+  const [is_mobile_nav_open, setIsMobileNavOpen] = useState(false);
   const [notice, setNotice] = useState<NoticeState>(null);
+
+  const auth_headers = { Authorization: `Bearer ${token}` };
+
+  const refreshDatasets = async () => {
+    const [collections_res, operations_res] = await Promise.all([
+      fetch('/api/admin/qdrant/collections', { headers: auth_headers }),
+      fetch('/api/admin/qdrant/operations', { headers: auth_headers }),
+    ]);
+
+    if (collections_res.ok) {
+      setDatasetsPayload(await collections_res.json());
+    }
+    if (operations_res.ok) {
+      setOperations(await operations_res.json());
+    }
+  };
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -62,18 +142,17 @@ export default function AdminDashboard() {
 
     const fetchAdminData = async () => {
       try {
-        const [health_res, metrics_res, docs_res, config_res] = await Promise.all([
-          fetch('/api/admin/health', { headers: { Authorization: `Bearer ${token}` } }),
-          fetch('/api/admin/metrics', { headers: { Authorization: `Bearer ${token}` } }),
-          fetch('/api/admin/documents', { headers: { Authorization: `Bearer ${token}` } }),
-          fetch('/api/admin/config', { headers: { Authorization: `Bearer ${token}` } }),
+        const [health_res, metrics_res, config_res] = await Promise.all([
+          fetch('/api/admin/health', { headers: auth_headers }),
+          fetch('/api/admin/metrics', { headers: auth_headers }),
+          fetch('/api/admin/config', { headers: auth_headers }),
         ]);
 
-        if (health_res.ok && metrics_res.ok && docs_res.ok && config_res.ok) {
+        if (health_res.ok && metrics_res.ok && config_res.ok) {
           setHealth(await health_res.json());
           setMetrics(await metrics_res.json());
-          setDocuments(await docs_res.json());
           setConfig(await config_res.json());
+          await refreshDatasets();
         } else if (health_res.status === 401 || metrics_res.status === 401) {
           logout();
           navigate('/login');
@@ -91,69 +170,89 @@ export default function AdminDashboard() {
     fetchAdminData();
   }, [token, isAuthenticated, navigate, logout]);
 
-  const refreshDocuments = async () => {
-    const response = await fetch('/api/admin/documents', { headers: { Authorization: `Bearer ${token}` } });
-    if (response.ok) {
-      setDocuments(await response.json());
+  useEffect(() => {
+    if (is_mobile) {
+      setIsMobileNavOpen(false);
     }
-  };
+  }, [is_mobile, active_module]);
 
   const handleLogout = () => {
     logout();
     navigate('/');
   };
 
-  const handleSync = async () => {
-    setIsSyncing(true);
-    setNotice(null);
-    try {
-      const response = await fetch('/api/admin/documents/sync', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!response.ok) {
-        throw new Error('sync_failed');
-      }
-
-      await refreshDocuments();
-      setNotice({ tone: 'success', message: 'Directory sync completed and document list refreshed.' });
-    } catch {
-      setNotice({ tone: 'error', message: 'Sync failed. Check corpus directory and backend logs.' });
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
-    if (!event.target.files || event.target.files.length === 0) {
+  const handleCreateCollection = async (event: FormEvent) => {
+    event.preventDefault();
+    const collection_name = new_collection_name.trim();
+    if (!collection_name) {
+      setNotice({ tone: 'error', message: 'Collection name is required.' });
       return;
     }
 
-    setIsUploading(true);
-    setNotice(null);
-
-    const form_data = new FormData();
-    form_data.append('file', event.target.files[0]);
-
     try {
-      const response = await fetch('/api/admin/documents/upload', {
+      const response = await fetch('/api/admin/qdrant/collections', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: form_data,
+        headers: {
+          'Content-Type': 'application/json',
+          ...auth_headers,
+        },
+        body: JSON.stringify({ name: collection_name, vector_size: new_vector_size, distance: 'cosine' }),
       });
 
       if (!response.ok) {
-        throw new Error('upload_failed');
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail || 'Create collection failed.');
       }
 
-      await refreshDocuments();
-      setNotice({ tone: 'success', message: 'File uploaded and queued for indexing.' });
-    } catch {
-      setNotice({ tone: 'error', message: 'Upload failed. Validate file type and retry.' });
-    } finally {
-      setIsUploading(false);
-      event.target.value = '';
+      setNewCollectionName('');
+      await refreshDatasets();
+      setNotice({ tone: 'success', message: `Collection ${collection_name} created.` });
+    } catch (error) {
+      setNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Create collection failed.' });
+    }
+  };
+
+  const handleActivateCollection = async (name: string) => {
+    try {
+      const response = await fetch(`/api/admin/qdrant/collections/${encodeURIComponent(name)}/activate`, {
+        method: 'POST',
+        headers: auth_headers,
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail || 'Activate failed.');
+      }
+      await refreshDatasets();
+      setNotice({ tone: 'success', message: `${name} is now active.` });
+    } catch (error) {
+      setNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Activate failed.' });
+    }
+  };
+
+  const handleDeleteCollection = async (name: string, is_active: boolean) => {
+    if (is_active) {
+      setNotice({ tone: 'error', message: 'Cannot delete active collection. Activate another first.' });
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete collection ${name}? This cannot be undone.`);
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/admin/qdrant/collections/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: auth_headers,
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail || 'Delete failed.');
+      }
+      await refreshDatasets();
+      setNotice({ tone: 'success', message: `${name} deleted.` });
+    } catch (error) {
+      setNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Delete failed.' });
     }
   };
 
@@ -170,7 +269,7 @@ export default function AdminDashboard() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          ...auth_headers,
         },
         body: JSON.stringify(config),
       });
@@ -185,226 +284,261 @@ export default function AdminDashboard() {
     }
   };
 
+  const nav_open = !is_nav_compact || is_mobile;
+  const drawer_width = nav_open ? SIDEBAR_WIDTH : SIDEBAR_COMPACT_WIDTH;
+
   if (loading) {
     return (
-      <div className='page-shell'>
+      <Box className='page-shell'>
         <main className='query-layout'>
-          <section className='chat-panel'>
-            <article className='message assistant-message loading-message'>
-              <span className='message-label'>Admin</span>
-              <p>Loading dashboard state...</p>
-            </article>
-          </section>
+          <Box className='chat-panel'>
+            <Box className='message assistant-message loading-message'>
+              <Typography variant='caption' color='text.secondary'>Admin</Typography>
+              <Typography>Loading dashboard state...</Typography>
+            </Box>
+          </Box>
         </main>
-      </div>
+      </Box>
     );
   }
 
   return (
-    <div className='admin-shell'>
-      <aside className={`admin-nav ${is_nav_compact ? 'compact' : ''}`}>
-        <div className='admin-nav-head'>
-          {!is_nav_compact && <span className='admin-nav-brand'>RAG Operator</span>}
-          <button
-            type='button'
+    <Box sx={{ display: 'flex', minHeight: '100vh', backgroundColor: '#F6F7F9' }}>
+      <Drawer
+        variant={is_mobile ? 'temporary' : 'permanent'}
+        open={is_mobile ? is_mobile_nav_open : true}
+        onClose={() => setIsMobileNavOpen(false)}
+        ModalProps={{ keepMounted: true }}
+        sx={{
+          width: drawer_width,
+          flexShrink: 0,
+          '& .MuiDrawer-paper': {
+            width: drawer_width,
+            boxSizing: 'border-box',
+            borderRight: '1px solid #DFE3EA',
+            backgroundColor: '#f1f4f8',
+            transition: 'width 160ms ease',
+            overflowX: 'hidden',
+          },
+        }}
+      >
+        <Box className='admin-nav-head'>
+          {nav_open && <Typography className='admin-nav-brand'>RAG Operator</Typography>}
+          <IconButton
             className='admin-nav-toggle'
-            onClick={() => setIsNavCompact((prev) => !prev)}
+            onClick={() => {
+              if (is_mobile) {
+                setIsMobileNavOpen((prev) => !prev);
+              } else {
+                setIsNavCompact((prev) => !prev);
+              }
+            }}
             aria-label='Toggle sidebar'
+            size='small'
           >
-            <span className='material-symbols-outlined'>{is_nav_compact ? 'menu' : 'menu_open'}</span>
-          </button>
-        </div>
+            {is_nav_compact && !is_mobile ? <MenuOutlinedIcon fontSize='small' /> : <MenuOpenOutlinedIcon fontSize='small' />}
+          </IconButton>
+        </Box>
 
-        <nav className='admin-nav-list'>
-          <SidebarItem
-            icon='space_dashboard'
-            label='Overview'
-            isOpen={!is_nav_compact}
-            isActive={active_module === 'overview'}
-            onClick={() => setActiveModule('overview')}
-          />
-          <SidebarItem
-            icon='folder_open'
-            label='Documents'
-            isOpen={!is_nav_compact}
-            isActive={active_module === 'documents'}
-            onClick={() => setActiveModule('documents')}
-          />
-          <SidebarItem
-            icon='monitoring'
-            label='Metrics'
-            isOpen={!is_nav_compact}
-            isActive={active_module === 'phoenix'}
-            onClick={() => setActiveModule('phoenix')}
-          />
-          <SidebarItem
-            icon='tune'
-            label='Config'
-            isOpen={!is_nav_compact}
-            isActive={active_module === 'config'}
-            onClick={() => setActiveModule('config')}
-          />
-        </nav>
+        <List className='admin-nav-list' disablePadding>
+          <SidebarItem icon={<DashboardOutlinedIcon fontSize='small' />} label='Overview' isOpen={nav_open} isActive={active_module === 'overview'} onClick={() => setActiveModule('overview')} />
+          <SidebarItem icon={<FolderOpenOutlinedIcon fontSize='small' />} label='Datasets' isOpen={nav_open} isActive={active_module === 'datasets'} onClick={() => setActiveModule('datasets')} />
+          <SidebarItem icon={<InsightsOutlinedIcon fontSize='small' />} label='Metrics' isOpen={nav_open} isActive={active_module === 'phoenix'} onClick={() => setActiveModule('phoenix')} />
+          <SidebarItem icon={<TuneOutlinedIcon fontSize='small' />} label='Config' isOpen={nav_open} isActive={active_module === 'config'} onClick={() => setActiveModule('config')} />
+        </List>
 
-        <div className='admin-nav-foot'>
-          <SidebarItem icon='logout' label='Sign Out' isOpen={!is_nav_compact} isActive={false} onClick={handleLogout} />
-        </div>
-      </aside>
+        <Box className='admin-nav-foot'>
+          <SidebarItem icon={<LogoutOutlinedIcon fontSize='small' />} label='Sign Out' isOpen={nav_open} isActive={false} onClick={handleLogout} />
+        </Box>
+      </Drawer>
 
-      <section className='admin-main'>
-        <header className='admin-topbar'>
-          <div>
-            <p className='query-kicker'>Phase 2 Control Plane</p>
-            <h2>{moduleTitle(active_module)}</h2>
-          </div>
-          <button className='action-pill' type='button' onClick={() => navigate('/')}>Back to Search</button>
-        </header>
+      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+        <AppBar position='sticky' color='transparent' elevation={0} sx={{ borderBottom: '1px solid #DFE3EA', backgroundColor: 'rgba(255,255,255,0.92)' }}>
+          <Toolbar sx={{ justifyContent: 'space-between', gap: 1.5, minHeight: '72px !important', px: { xs: 1.5, md: 2.25 } }}>
+            <Box>
+              <Typography variant='overline' color='text.secondary'>Phase 2 Control Plane</Typography>
+              <Typography variant='h5'>{moduleTitle(active_module)}</Typography>
+            </Box>
+            <Stack direction='row' spacing={1}>
+              {is_mobile && <Button variant='outlined' onClick={() => setIsMobileNavOpen(true)}>Menu</Button>}
+              <Button variant='outlined' onClick={() => refreshDatasets()}>Refresh</Button>
+              <Button variant='contained' onClick={() => navigate('/')}>Back to Search</Button>
+            </Stack>
+          </Toolbar>
+        </AppBar>
 
-        {notice && <Notice tone={notice.tone} message={notice.message} />}
+        <Box sx={{ p: { xs: 1.5, md: 2.25 } }}>
+          {notice && <Notice tone={notice.tone} message={notice.message} />}
 
-        <main className='admin-content'>
           {active_module === 'overview' && (
-            <section className='admin-grid'>
-              <MetricCard title='System Status' value={health?.status.toUpperCase() || 'UNKNOWN'} status={health?.status === 'ok' ? 'success' : 'error'} />
-              <MetricCard title='Active Pipeline' value={health?.pipeline || '--'} />
-              <MetricCard title='Document Count' value={String(health?.document_count ?? 0)} />
-              <MetricCard title='Storage Used' value={health?.storage_used || '--'} />
-              <MetricCard title='System Uptime' value={health?.uptime || '--'} />
-            </section>
+            <Grid container spacing={1.5}>
+              <Grid size={{ xs: 12, sm: 6 }}><MetricCard title='System Status' value={health?.status.toUpperCase() || 'UNKNOWN'} status={health?.status === 'ok' ? 'success' : 'error'} /></Grid>
+              <Grid size={{ xs: 12, sm: 6 }}><MetricCard title='Active Pipeline' value={health?.pipeline || '--'} /></Grid>
+              <Grid size={{ xs: 12, sm: 6 }}><MetricCard title='Documents Indexed' value={String(health?.document_count ?? 0)} /></Grid>
+              <Grid size={{ xs: 12, sm: 6 }}><MetricCard title='Storage Used' value={health?.storage_used || '--'} /></Grid>
+              <Grid size={{ xs: 12, sm: 6 }}><MetricCard title='System Uptime' value={health?.uptime || '--'} /></Grid>
+              <Grid size={{ xs: 12, sm: 6 }}><MetricCard title='Active Dataset' value={datasets_payload?.active_collection || 'None'} /></Grid>
+            </Grid>
           )}
 
-          {active_module === 'documents' && (
-            <section className='admin-card'>
-              <div className='admin-card-head'>
-                <h3>Corpus Management</h3>
-                <div className='admin-actions'>
-                  <label className='admin-button primary'>
-                    {is_uploading ? 'Uploading...' : 'Upload File'}
-                    <input type='file' onChange={handleFileUpload} disabled={is_uploading} hidden />
-                  </label>
-                  <button className='admin-button' type='button' onClick={handleSync} disabled={is_syncing}>
-                    {is_syncing ? 'Syncing...' : 'Sync Directory'}
-                  </button>
-                </div>
-              </div>
+          {active_module === 'datasets' && (
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Card>
+                <CardContent>
+                  <Stack component='form' direction={{ xs: 'column', md: 'row' }} spacing={1.25} onSubmit={handleCreateCollection}>
+                    <TextField size='small' label='New collection name' value={new_collection_name} onChange={(event) => setNewCollectionName(event.target.value)} fullWidth />
+                    <TextField size='small' label='Vector size' type='number' inputProps={{ min: 8 }} value={new_vector_size} onChange={(event) => setNewVectorSize(Number.parseInt(event.target.value || '384', 10))} sx={{ width: { xs: '100%', md: 160 } }} />
+                    <Button type='submit' variant='contained'>Create Dataset</Button>
+                  </Stack>
+                </CardContent>
+              </Card>
 
-              {documents.length === 0 ? (
-                <div className='admin-empty'>No documents found in this pipeline collection.</div>
-              ) : (
-                <div className='admin-table-wrap'>
-                  <table className='admin-table'>
-                    <thead>
-                      <tr>
-                        <th>Filename</th>
-                        <th>Path</th>
-                        <th>Checksum</th>
-                        <th>ID</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {documents.map((doc) => (
-                        <tr key={doc.id}>
-                          <td>{doc.name}</td>
-                          <td className='mono'>{doc.path}</td>
-                          <td className='mono'>{doc.checksum.slice(0, 8)}...</td>
-                          <td className='mono'>{doc.id.slice(0, 8)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
+              <Card>
+                <CardContent>
+                  <Typography variant='subtitle2' color='text.secondary'>Alias: {datasets_payload?.alias || 'rag_active'}</Typography>
+                  <Typography variant='h6' sx={{ mt: 0.5 }}>Active: {datasets_payload?.active_collection || 'None'}</Typography>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent>
+                  <TableContainer>
+                    <Table size='small'>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Name</TableCell>
+                          <TableCell>Vectors</TableCell>
+                          <TableCell>Points</TableCell>
+                          <TableCell>State</TableCell>
+                          <TableCell>Actions</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {(datasets_payload?.collections || []).map((item) => (
+                          <TableRow key={item.name}>
+                            <TableCell>{item.name}</TableCell>
+                            <TableCell>{coerceCount(item.vectors_count)}</TableCell>
+                            <TableCell>{coerceCount(item.points_count)}</TableCell>
+                            <TableCell>{item.is_active ? <Chip label='Active' color='success' size='small' /> : <Chip label='Inactive' size='small' />}</TableCell>
+                            <TableCell>
+                              <Stack direction='row' spacing={1}>
+                                <Button size='small' variant='outlined' onClick={() => handleActivateCollection(item.name)} disabled={item.is_active}>Activate</Button>
+                                <Button size='small' variant='outlined' color='error' onClick={() => handleDeleteCollection(item.name, item.is_active)} disabled={item.is_active}>Delete</Button>
+                              </Stack>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent>
+                  <Typography variant='h6'>Recent Operations</Typography>
+                  <TableContainer sx={{ mt: 1 }}>
+                    <Table size='small'>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Time</TableCell>
+                          <TableCell>Action</TableCell>
+                          <TableCell>Target</TableCell>
+                          <TableCell>Actor</TableCell>
+                          <TableCell>Status</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {operations.slice(0, 20).map((item) => (
+                          <TableRow key={item.id}>
+                            <TableCell><Typography variant='caption'>{new Date(item.created_at).toLocaleString()}</Typography></TableCell>
+                            <TableCell>{item.action}</TableCell>
+                            <TableCell>{item.target}</TableCell>
+                            <TableCell>{item.actor}</TableCell>
+                            <TableCell>{item.status}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </CardContent>
+              </Card>
+            </Stack>
           )}
 
           {active_module === 'phoenix' && (
-            <section className='admin-card'>
-              <div className='admin-grid three'>
-                <MetricCard title='Avg Latency' value={`${metrics?.query_latency_ms ?? 0} ms`} />
-                <MetricCard title='Retrieval Score' value={`${metrics?.retrieval_score ?? 0}`} />
-                <MetricCard title='Total Traces' value={`${metrics?.total_queries ?? 0}`} />
-              </div>
-              <p className='admin-footnote'>Phoenix integration status: {metrics?.phoenix_integration || 'pending'}</p>
-            </section>
+            <Card sx={{ mt: 1 }}>
+              <CardContent>
+                <Grid container spacing={1.5}>
+                  <Grid size={{ xs: 12, md: 4 }}><MetricCard title='Avg Latency' value={`${metrics?.query_latency_ms ?? 0} ms`} /></Grid>
+                  <Grid size={{ xs: 12, md: 4 }}><MetricCard title='Retrieval Score' value={`${metrics?.retrieval_score ?? 0}`} /></Grid>
+                  <Grid size={{ xs: 12, md: 4 }}><MetricCard title='Total Traces' value={`${metrics?.total_queries ?? 0}`} /></Grid>
+                </Grid>
+                <Typography color='text.secondary' sx={{ mt: 1.5 }}>Phoenix integration status: {metrics?.phoenix_integration || 'pending'}</Typography>
+              </CardContent>
+            </Card>
           )}
 
           {active_module === 'config' && (
-            <section className='admin-card'>
-              <form className='admin-form' onSubmit={handleConfigSave}>
-                <label>
-                  <span>Active Pipeline</span>
-                  <select
-                    value={config?.pipeline || 'manual'}
-                    onChange={(event) =>
-                      setConfig((prev) => (prev ? { ...prev, pipeline: event.target.value } : null))
-                    }
-                  >
-                    <option value='manual'>Manual Python</option>
-                    <option value='langchain'>LangChain Framework</option>
-                  </select>
-                </label>
+            <Card sx={{ mt: 1 }}>
+              <CardContent>
+                <Box component='form' onSubmit={handleConfigSave}>
+                  <Stack spacing={2} sx={{ maxWidth: 620 }}>
+                    <FormControl size='small'>
+                      <InputLabel id='pipeline-label'>Default Ingest Pipeline</InputLabel>
+                      <Select labelId='pipeline-label' label='Default Ingest Pipeline' value={config?.pipeline || 'manual'} onChange={(event) => setConfig((prev) => (prev ? { ...prev, pipeline: event.target.value } : null))}>
+                        <MenuItem value='manual'>Manual Python</MenuItem>
+                        <MenuItem value='langchain'>LangChain Framework</MenuItem>
+                      </Select>
+                    </FormControl>
 
-                <label>
-                  <span>Top K Documents</span>
-                  <input
-                    type='number'
-                    min={1}
-                    value={config?.top_k || 5}
-                    onChange={(event) =>
-                      setConfig((prev) =>
-                        prev ? { ...prev, top_k: Number.parseInt(event.target.value || '1', 10) } : null,
-                      )
-                    }
-                  />
-                </label>
+                    <TextField size='small' type='number' label='Top K Documents' inputProps={{ min: 1 }} value={config?.top_k || 5} onChange={(event) => setConfig((prev) => (prev ? { ...prev, top_k: Number.parseInt(event.target.value || '1', 10) } : null))} />
 
-                <fieldset>
-                  <legend>Hybrid Search (RRF)</legend>
-                  <label className='inline'>
-                    <input
-                      type='radio'
-                      name='hybrid'
-                      checked={config?.hybrid_enabled === true}
-                      onChange={() => setConfig((prev) => (prev ? { ...prev, hybrid_enabled: true } : null))}
-                    />
-                    Enable
-                  </label>
-                  <label className='inline'>
-                    <input
-                      type='radio'
-                      name='hybrid'
-                      checked={config?.hybrid_enabled === false}
-                      onChange={() => setConfig((prev) => (prev ? { ...prev, hybrid_enabled: false } : null))}
-                    />
-                    Disable
-                  </label>
-                </fieldset>
+                    <FormControl>
+                      <FormLabel>Hybrid Search (RRF)</FormLabel>
+                      <RadioGroup row value={String(config?.hybrid_enabled ?? true)} onChange={(event) => setConfig((prev) => (prev ? { ...prev, hybrid_enabled: event.target.value === 'true' } : null))}>
+                        <FormControlLabel value='true' control={<Radio />} label='Enable' />
+                        <FormControlLabel value='false' control={<Radio />} label='Disable' />
+                      </RadioGroup>
+                    </FormControl>
 
-                <div className='admin-form-foot'>
-                  <button type='submit' className='admin-button primary'>Save Configuration</button>
-                </div>
-              </form>
-            </section>
+                    <Stack direction='row' justifyContent='flex-end'>
+                      <Button type='submit' variant='contained'>Save Configuration</Button>
+                    </Stack>
+                  </Stack>
+                </Box>
+              </CardContent>
+            </Card>
           )}
-        </main>
-      </section>
-    </div>
+        </Box>
+      </Box>
+    </Box>
   );
+}
+
+function coerceCount(value: unknown): number {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).reduce((total, item) => total + coerceCount(item), 0);
+  }
+  return 0;
 }
 
 function moduleTitle(module: AdminModule) {
   if (module === 'overview') {
     return 'System Overview';
   }
-
-  if (module === 'documents') {
-    return 'Document Management';
+  if (module === 'datasets') {
+    return 'Qdrant Dataset Control';
   }
-
   if (module === 'phoenix') {
     return 'Tracing and Metrics';
   }
-
   return 'Pipeline Configuration';
 }
 
@@ -415,23 +549,23 @@ function SidebarItem({
   isActive,
   onClick,
 }: {
-  icon: string;
+  icon: ReactNode;
   label: string;
   isOpen: boolean;
   isActive: boolean;
   onClick: () => void;
 }) {
   return (
-    <button
-      type='button'
+    <ListItemButton
       onClick={onClick}
       className={`admin-nav-item ${isActive ? 'active' : ''}`}
       title={label}
       aria-label={label}
+      sx={{ justifyContent: isOpen ? 'flex-start' : 'center' }}
     >
-      <span className='material-symbols-outlined'>{icon}</span>
-      {isOpen && <span>{label}</span>}
-    </button>
+      <ListItemIcon sx={{ minWidth: 30, color: 'inherit' }}>{icon}</ListItemIcon>
+      {isOpen && <ListItemText primary={label} primaryTypographyProps={{ fontFamily: '"Satoshi", sans-serif', fontWeight: 600 }} />}
+    </ListItemButton>
   );
 }
 
@@ -445,13 +579,22 @@ function MetricCard({
   status?: 'success' | 'error';
 }) {
   return (
-    <article className='admin-metric-card'>
-      <p>{title}</p>
-      <strong className={status ? `tone-${status}` : ''}>{value}</strong>
-    </article>
+    <Card variant='outlined'>
+      <CardContent>
+        <Typography variant='caption' color='text.secondary'>{title}</Typography>
+        <Typography variant='h4' sx={{ mt: 0.5, color: status === 'success' ? 'success.main' : status === 'error' ? 'error.main' : 'text.primary' }}>
+          {value}
+        </Typography>
+      </CardContent>
+    </Card>
   );
 }
 
 function Notice({ tone, message }: { tone: NoticeTone; message: string }) {
-  return <div className={`admin-notice ${tone}`}>{message}</div>;
+  const severity = tone === 'success' ? 'success' : tone === 'error' ? 'error' : 'info';
+  return (
+    <Alert severity={severity} sx={{ mb: 1.5 }}>
+      {message}
+    </Alert>
+  );
 }

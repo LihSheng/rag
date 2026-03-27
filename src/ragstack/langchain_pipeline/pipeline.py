@@ -23,6 +23,7 @@ from ragstack.qdrant_store import (
     ensure_collection,
     indexed_documents,
     qdrant_point_id,
+    resolve_query_collection,
 )
 from ragstack.rerankers import Reranker, build_reranker
 
@@ -100,7 +101,12 @@ class LangChainRagPipeline:
         )
 
     def ask(self, question: str) -> AnswerResult:
-        vector_store = self._vector_store()
+        query_collection = resolve_query_collection(
+            self.client,
+            preferred_collection=self.settings.qdrant_active_alias,
+            fallback_collection=self.collection_name,
+        )
+        vector_store = self._vector_store(collection_name=query_collection)
         retrieval_limit = self.settings.top_k
         if self.reranker:
             retrieval_limit = max(self.settings.rerank_top_n, self.settings.top_k)
@@ -159,15 +165,18 @@ class LangChainRagPipeline:
             insufficient_context=False,
         )
 
-    def _vector_store(self) -> QdrantVectorStore:
+    def _vector_store(self, collection_name: str | None = None) -> QdrantVectorStore:
         return QdrantVectorStore(
             client=self.client,
-            collection_name=self.collection_name,
+            collection_name=collection_name or self.collection_name,
             embedding=self.embeddings,
             retrieval_mode=RetrievalMode.DENSE,
         )
 
-    def _build_langchain_documents(self, document: LoadedDocument) -> tuple[list[LangDocument], list[str]]:
+    def _build_langchain_documents(
+        self,
+        document: LoadedDocument,
+    ) -> tuple[list[LangDocument], list[str]]:
         manual_chunks = chunk_loaded_document(
             document,
             pipeline="langchain",
@@ -203,9 +212,9 @@ class LangChainRagPipeline:
                 continue
 
             chunk_id = f"{document.document_id}-langchain-{index:04d}"
-            metadata = dict(doc.metadata)
-            metadata.update({"chunk_id": chunk_id, "text": source_text, "pipeline": "langchain"})
-            normalized_docs.append(LangDocument(page_content=source_text, metadata=metadata))
+            payload_metadata = dict(doc.metadata)
+            payload_metadata.update({"chunk_id": chunk_id, "text": source_text, "pipeline": "langchain"})
+            normalized_docs.append(LangDocument(page_content=source_text, metadata=payload_metadata))
             ids.append(qdrant_point_id(chunk_id))
 
         return normalized_docs, ids

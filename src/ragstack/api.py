@@ -2,25 +2,25 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Protocol, Any
+from typing import Any, Protocol
 
 import jwt
-from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.security import OAuth2PasswordBearer
+from qdrant_client import models as qdrant_models
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
-from fastapi import UploadFile, File, BackgroundTasks
 from pydantic import BaseModel
-import shutil
 
 from ragstack.config import Settings
 from ragstack.langchain_pipeline.pipeline import LangChainRagPipeline
 from ragstack.manual.pipeline import ManualRagPipeline
 from ragstack.models import AnswerResult
-
+from ragstack.ops_log import OpsLogStore
+from ragstack.qdrant_store import create_qdrant_client
 
 logger = logging.getLogger(__name__)
 
@@ -46,30 +46,76 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
 
-SECRET_KEY = "dev_secret_key"
-ALGORITHM = "HS256"
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
-def create_access_token(data: dict):
+class CreateCollectionRequest(BaseModel):
+    name: str
+    vector_size: int = 384
+    distance: str = "cosine"
+
+
+def _coerce_count(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, dict):
+        return sum(_coerce_count(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return sum(_coerce_count(item) for item in value)
+    return 0
+
+
+def _collection_count(collection_info: Any, key: str, fallback_key: str | None = None) -> int:
+    primary = getattr(collection_info, key, None)
+    if primary is not None:
+        return _coerce_count(primary)
+
+    if fallback_key:
+        fallback = getattr(collection_info, fallback_key, None)
+        if fallback is not None:
+            return _coerce_count(fallback)
+
+    try:
+        dumped = collection_info.model_dump()
+    except Exception:
+        dumped = {}
+
+    if key in dumped:
+        return _coerce_count(dumped.get(key))
+    if fallback_key and fallback_key in dumped:
+        return _coerce_count(dumped.get(fallback_key))
+    return 0
+
+
+SECRET_KEY = 'dev_secret_key'
+ALGORITHM = 'HS256'
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl='/api/auth/login')
+
+
+def create_access_token(data: dict[str, Any]) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(hours=24)
-    to_encode.update({"exp": expire})
+    to_encode.update({'exp': expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
+
+def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
+        username = payload.get('sub')
         if username is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return username
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+            raise HTTPException(status_code=401, detail='Invalid token')
+        return str(username)
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail='Invalid token') from exc
 
 
 class RagPipeline(Protocol):
@@ -81,211 +127,273 @@ class RagPipeline(Protocol):
 
 
 def _resolve_static_dir() -> Path:
-    explicit = os.getenv("FRONTEND_DIST_DIR")
+    explicit = os.getenv('FRONTEND_DIST_DIR')
     if explicit:
         return Path(explicit)
-    return Path("/opt/ragstack-ui")
+    return Path('/opt/ragstack-ui')
 
 
 def _build_pipeline(settings: Settings) -> RagPipeline:
-    if settings.default_pipeline == "manual":
+    if settings.default_pipeline == 'manual':
         return ManualRagPipeline(settings)
-    if settings.default_pipeline == "langchain":
+    if settings.default_pipeline == 'langchain':
         return LangChainRagPipeline(settings)
-    raise ValueError(f"Unsupported DEFAULT_PIPELINE: {settings.default_pipeline}")
+    raise ValueError(f'Unsupported DEFAULT_PIPELINE: {settings.default_pipeline}')
 
 
 def create_app() -> FastAPI:
     settings = Settings.from_env()
-    app = FastAPI(title="RAGStack API")
+    app = FastAPI(title='RAGStack API')
     static_dir = _resolve_static_dir()
     pipeline = _build_pipeline(settings)
+    ops_log = OpsLogStore.from_data_dir(settings.source_dir.parent)
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=['*'],
         allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=['*'],
+        allow_headers=['*'],
     )
 
-    @app.get("/api/health")
+    def alias_target(client: Any) -> str | None:
+        try:
+            aliases = client.get_aliases()
+            for alias_item in aliases.aliases:
+                if alias_item.alias_name == settings.qdrant_active_alias:
+                    return alias_item.collection_name
+        except Exception:
+            return None
+        return None
+
+    @app.get('/api/health')
     def health() -> dict[str, str]:
-        return {"status": "ok", "pipeline": settings.default_pipeline}
+        return {'status': 'ok', 'pipeline': settings.default_pipeline}
 
-    @app.post("/api/auth/login", response_model=TokenResponse)
-    def login(payload: LoginRequest):
-        if payload.username == "admin" and payload.password == "admin":
-            access_token = create_access_token(data={"sub": payload.username})
-            return {"access_token": access_token, "token_type": "bearer"}
-        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    @app.post('/api/auth/login', response_model=TokenResponse)
+    def login(payload: LoginRequest) -> dict[str, str]:
+        if payload.username == 'admin' and payload.password == 'admin':
+            access_token = create_access_token(data={'sub': payload.username})
+            return {'access_token': access_token, 'token_type': 'bearer'}
+        raise HTTPException(status_code=401, detail='Incorrect username or password')
 
-    @app.get("/api/admin/health")
-    def admin_health(current_user: str = Depends(get_current_user)):
-        # Provide extended system health for admin
+    @app.get('/api/admin/health')
+    def admin_health(current_user: str = Depends(get_current_user)) -> dict[str, Any]:
+        del current_user
+        client = create_qdrant_client(settings.qdrant_url)
+        active_name = alias_target(client)
+        points_count = 0
+        if active_name and client.collection_exists(active_name):
+            info = client.get_collection(active_name)
+            points_count = info.points_count or 0
         return {
-            "status": "ok", 
-            "pipeline": settings.default_pipeline,
-            "document_count": 0, # Placeholder
-            "storage_used": "150MB", # Placeholder
-            "uptime": "24h" # Placeholder
+            'status': 'ok',
+            'pipeline': settings.default_pipeline,
+            'document_count': points_count,
+            'storage_used': 'n/a',
+            'uptime': '24h',
         }
 
-    @app.get("/api/admin/metrics")
-    def admin_metrics(current_user: str = Depends(get_current_user)):
+    @app.get('/api/admin/metrics')
+    def admin_metrics(current_user: str = Depends(get_current_user)) -> dict[str, Any]:
+        del current_user
         import httpx
-        import logging
 
         latency = 0
         total = 0
-        integration = "failed"
-        
+        integration = 'failed'
+
         try:
-            # Query the GraphQL endpoint of Phoenix
-            query = """
+            query = '''
             query {
               project(name: "default") {
                 traceCount
                 latencyMs: traceLatencyNs(aggregation: AVERAGE)
               }
             }
-            """
-            # Timeout quick so UI doesn't hang if phoenix is down
-            resp = httpx.post(
-                "http://phoenix:6006/graphql", 
-                json={"query": query},
-                timeout=2.0
-            )
-            
+            '''
+            resp = httpx.post('http://phoenix:6006/graphql', json={'query': query}, timeout=2.0)
+
             if resp.status_code == 200:
-                data = resp.json().get("data", {}).get("project", {})
+                data = resp.json().get('data', {}).get('project', {})
                 if data:
-                    total = data.get("traceCount", 0)
-                    # Convert nanos to millis
-                    latency_ns = data.get("latencyMs") or 0
+                    total = data.get('traceCount', 0)
+                    latency_ns = data.get('latencyMs') or 0
                     latency = int(latency_ns / 1_000_000)
-                integration = "active"
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Phoenix metrics fetch failed: {e}")
-            
+                integration = 'active'
+        except Exception as exc:
+            logging.getLogger(__name__).warning('Phoenix metrics fetch failed: %s', exc)
+
         return {
-            "query_latency_ms": latency,
-            "retrieval_score": 0.0, # Placeholder until custom evaluations
-            "total_queries": total,
-            "phoenix_integration": integration
+            'query_latency_ms': latency,
+            'retrieval_score': 0.0,
+            'total_queries': total,
+            'phoenix_integration': integration,
         }
 
-    @app.get("/api/admin/config")
-    def get_config(current_user: str = Depends(get_current_user)):
+    @app.get('/api/admin/config')
+    def get_config(current_user: str = Depends(get_current_user)) -> dict[str, Any]:
+        del current_user
         return {
-            "pipeline": settings.default_pipeline,
-            "top_k": settings.top_k,
-            "hybrid_enabled": settings.hybrid_enabled,
+            'pipeline': settings.default_pipeline,
+            'top_k': settings.top_k,
+            'hybrid_enabled': settings.hybrid_enabled,
         }
 
-    @app.post("/api/admin/config")
-    def update_config(payload: dict, current_user: str = Depends(get_current_user)):
-        # For this learning stack, we only mock updating config dynamically 
-        # (in reality we would write to .env or update in-memory globals safely)
-        return {"status": "accepted", "message": "Configuration saved temporarily."}
+    @app.post('/api/admin/config')
+    def update_config(payload: dict[str, Any], current_user: str = Depends(get_current_user)) -> dict[str, str]:
+        del payload, current_user
+        return {'status': 'accepted', 'message': 'Configuration saved temporarily.'}
 
-    @app.get("/api/admin/documents")
-    def list_documents(current_user: str = Depends(get_current_user)):
-        from ragstack.qdrant_store import create_qdrant_client, indexed_documents
-        try:
-            client = create_qdrant_client(settings.qdrant_url)
-            collection = settings.collection_name(settings.default_pipeline)
-            docs = indexed_documents(client, collection)
-            # docs is dict[source_path, tuple[checksum, document_id]]
-            items = []
-            for path, (checksum, doc_id) in docs.items():
-                items.append({
-                    "id": doc_id,
-                    "name": Path(path).name,
-                    "path": path,
-                    "checksum": checksum
-                })
-            return items
-        except Exception as e:
-            logger.exception("Failed to fetch documents")
-            raise HTTPException(status_code=500, detail=str(e))
+    @app.get('/api/admin/qdrant/collections')
+    def list_qdrant_collections(current_user: str = Depends(get_current_user)) -> dict[str, Any]:
+        client = create_qdrant_client(settings.qdrant_url)
+        active_name = alias_target(client)
+        collections = client.get_collections().collections
+        items: list[dict[str, Any]] = []
+        for item in collections:
+            collection_info = client.get_collection(item.name)
+            vectors_count = _collection_count(collection_info, "vectors_count", "indexed_vectors_count")
+            points_count = _collection_count(collection_info, "points_count")
+            items.append(
+                {
+                    "name": item.name,
+                    "vectors_count": vectors_count,
+                    "points_count": points_count,
+                    "is_active": item.name == active_name,
+                }
+            )
+        ops_log.record(action="collections:list", target="*", actor=current_user, status="completed")
+        return {"alias": settings.qdrant_active_alias, "active_collection": active_name, "collections": items}
 
-    @app.post("/api/admin/documents/sync")
-    def sync_documents(current_user: str = Depends(get_current_user)):
-        try:
-            # Re-build pipeline to ensure fresh state if needed, but we can reuse the global one since it's injected
-            pipe = _build_pipeline(settings)
-            result = pipe.ingest(settings.source_dir)
-            return result.to_dict()
-        except Exception as e:
-            logger.exception("Manual sync failed")
-            raise HTTPException(status_code=500, detail=str(e))
+    @app.post('/api/admin/qdrant/collections')
+    def create_qdrant_collection(
+        payload: CreateCollectionRequest,
+        current_user: str = Depends(get_current_user),
+    ) -> dict[str, str]:
+        client = create_qdrant_client(settings.qdrant_url)
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Collection name cannot be empty")
+        if client.collection_exists(name):
+            raise HTTPException(status_code=409, detail="Collection already exists")
 
-    @app.post("/api/admin/documents/upload")
-    def upload_document(
-        background_tasks: BackgroundTasks,
-        file: UploadFile = File(...), 
-        current_user: str = Depends(get_current_user)
-    ):
-        target_path = settings.source_dir / file.filename
-        try:
-            with open(target_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            # trigger sync in background so we don't block the UI upload
-            pipe = _build_pipeline(settings)
-            background_tasks.add_task(pipe.ingest, settings.source_dir)
-            
-            return {"status": "accepted", "filename": file.filename, "message": "File uploaded and syncing."}
-        except Exception as e:
-            logger.exception("Upload failed")
-            raise HTTPException(status_code=500, detail=str(e))
+        distance_map = {
+            "cosine": qdrant_models.Distance.COSINE,
+            "dot": qdrant_models.Distance.DOT,
+            "euclid": qdrant_models.Distance.EUCLID,
+        }
+        distance_key = payload.distance.lower()
+        if distance_key not in distance_map:
+            raise HTTPException(status_code=400, detail="Unsupported distance metric")
 
-    @app.post("/api/query", response_model=QueryResponse, responses={500: {"model": ApiError}})
+        client.create_collection(
+            collection_name=name,
+            vectors_config=qdrant_models.VectorParams(
+                size=payload.vector_size,
+                distance=distance_map[distance_key],
+            ),
+            on_disk_payload=True,
+        )
+        ops_log.record(action="collection:create", target=name, actor=current_user, status="completed")
+        return {"status": "ok", "message": f"Collection {name} created."}
+
+    @app.post('/api/admin/qdrant/collections/{collection_name}/activate')
+    def activate_qdrant_collection(
+        collection_name: str,
+        current_user: str = Depends(get_current_user),
+    ) -> dict[str, str]:
+        client = create_qdrant_client(settings.qdrant_url)
+        if not client.collection_exists(collection_name):
+            raise HTTPException(status_code=404, detail="Collection not found")
+
+        previous_target = alias_target(client)
+        operations: list[qdrant_models.ChangeAliasesOperation] = []
+        if previous_target:
+            operations.append(
+                qdrant_models.DeleteAliasOperation(
+                    delete_alias=qdrant_models.DeleteAlias(alias_name=settings.qdrant_active_alias),
+                )
+            )
+        operations.append(
+            qdrant_models.CreateAliasOperation(
+                create_alias=qdrant_models.CreateAlias(
+                    collection_name=collection_name,
+                    alias_name=settings.qdrant_active_alias,
+                )
+            )
+        )
+        client.update_collection_aliases(change_aliases_operations=operations)
+        ops_log.record(action="collection:activate", target=collection_name, actor=current_user, status="completed")
+        return {"status": "ok", "message": f"Active alias now points to {collection_name}."}
+
+    @app.delete('/api/admin/qdrant/collections/{collection_name}')
+    def delete_qdrant_collection(
+        collection_name: str,
+        current_user: str = Depends(get_current_user),
+    ) -> dict[str, str]:
+        client = create_qdrant_client(settings.qdrant_url)
+        if not client.collection_exists(collection_name):
+            raise HTTPException(status_code=404, detail="Collection not found")
+        active_name = alias_target(client)
+        if active_name == collection_name:
+            raise HTTPException(status_code=400, detail="Cannot delete active collection. Activate another first.")
+
+        client.delete_collection(collection_name=collection_name)
+        ops_log.record(action="collection:delete", target=collection_name, actor=current_user, status="completed")
+        return {"status": "ok", "message": f"Collection {collection_name} deleted."}
+
+    @app.get('/api/admin/qdrant/operations')
+    def list_admin_operations(current_user: str = Depends(get_current_user)) -> list[dict[str, Any]]:
+        ops_log.record(action="operations:list", target="*", actor=current_user, status="completed")
+        return ops_log.recent(limit=80)
+
+    @app.post('/api/query', response_model=QueryResponse, responses={500: {'model': ApiError}})
     def query(payload: QueryRequest) -> QueryResponse | JSONResponse:
         question = payload.question.strip()
         if not question:
-            raise HTTPException(status_code=400, detail="Question must not be empty.")
+            raise HTTPException(status_code=400, detail='Question must not be empty.')
 
         try:
             result = pipeline.ask(question)
         except HTTPException:
             raise
         except Exception as exc:  # pragma: no cover
-            logger.exception("Query failed")
+            logger.exception('Query failed')
             return JSONResponse(
                 status_code=500,
                 content={
-                    "error": "PIPELINE_ERROR",
-                    "message": str(exc),
+                    'error': 'PIPELINE_ERROR',
+                    'message': str(exc),
                 },
             )
 
         return QueryResponse(**result.to_dict())
 
     if static_dir.exists():
-        assets_dir = static_dir / "assets"
+        assets_dir = static_dir / 'assets'
         if assets_dir.exists():
-            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+            app.mount('/assets', StaticFiles(directory=assets_dir), name='assets')
 
-        @app.get("/")
+        @app.get('/')
         def index() -> FileResponse:
-            return FileResponse(static_dir / "index.html")
+            return FileResponse(static_dir / 'index.html')
 
-        @app.get("/{path:path}")
+        @app.get('/{path:path}')
         def spa(path: str) -> FileResponse:
-            if path.startswith("api/"):
-                raise HTTPException(status_code=404, detail="Not found")
+            if path.startswith('api/'):
+                raise HTTPException(status_code=404, detail='Not found')
 
             target = (static_dir / path).resolve()
             static_root = static_dir.resolve()
             if target.exists() and static_root in target.parents:
                 return FileResponse(target)
-            return FileResponse(static_dir / "index.html")
+            return FileResponse(static_dir / 'index.html')
 
     return app
 
 
 from ragstack.bootstrap import ensure_telemetry
+
 ensure_telemetry()
 app = create_app()

@@ -75,6 +75,7 @@ class Settings:
     embed_model: str
     qdrant_url: str
     qdrant_collection_prefix: str
+    qdrant_active_alias: str
     source_dir: Path
     eval_path: Path
     chunk_size: int
@@ -115,6 +116,7 @@ class Settings:
             embed_model=_env_str("EMBED_MODEL", "nomic-embed-text"),
             qdrant_url=_env_str("QDRANT_URL", "http://localhost:6333"),
             qdrant_collection_prefix=_env_str("QDRANT_COLLECTION_PREFIX", "rag"),
+            qdrant_active_alias=_env_str("QDRANT_ACTIVE_ALIAS", "rag_active"),
             source_dir=_env_path("SOURCE_DIR", "data/corpus"),
             eval_path=_env_path("EVAL_PATH", "data/eval/questions.json"),
             chunk_size=_env_int("CHUNK_SIZE", 1000),

@@ -1,33 +1,18 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Satoshi:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import './styles/tokens.css';
 
 :root {
-  color-scheme: light;
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --surface-2: #eef1f5;
-  --ink: #0e1116;
-  --muted: #8b95a7;
-  --line: #dfe3ea;
-  --accent: #2d66f6;
-  --accent-deep: #1f4ec7;
-  --success: #18a572;
-  --warning: #d98e04;
-  --error: #c23b3b;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --shadow: 0 12px 32px rgba(14, 17, 22, 0.08);
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background: radial-gradient(circle at 5% 0%, #ffffff 0%, var(--bg) 38%);
-  color: var(--ink);
-  font-family: 'Instrument Sans', sans-serif;
+  --bg: var(--color-bg);
+  --surface: var(--color-surface);
+  --surface-2: var(--color-surface-2);
+  --ink: var(--color-ink);
+  --muted: var(--color-muted);
+  --line: var(--color-border);
+  --accent: var(--color-primary);
+  --accent-deep: var(--color-primary-deep);
+  --success: var(--color-success);
+  --warning: var(--color-warning);
+  --error: var(--color-error);
+  --shadow: var(--shadow-soft);
 }
 
 .page-shell {
@@ -379,10 +364,15 @@ body {
 }
 
 .admin-shell {
+  --admin-sidebar-width: 250px;
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 250px 1fr;
+  grid-template-columns: var(--admin-sidebar-width) 1fr;
   background: var(--bg);
+}
+
+.admin-shell.compact {
+  --admin-sidebar-width: 72px;
 }
 
 .admin-nav {
@@ -391,11 +381,8 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  transition: grid-template-columns 160ms ease;
-}
-
-.admin-nav.compact {
-  width: 72px;
+  width: var(--admin-sidebar-width);
+  transition: width 160ms ease;
 }
 
 .admin-nav-head {
@@ -495,24 +482,11 @@ body {
   border: 1px solid var(--line);
   padding: 10px 12px;
   font-size: 14px;
-}
-
-.admin-notice.success {
-  border-color: color-mix(in srgb, var(--success) 35%, transparent);
-  background: color-mix(in srgb, var(--success) 10%, #ffffff);
-  color: #0f6d4e;
-}
-
-.admin-notice.error {
-  border-color: color-mix(in srgb, var(--error) 35%, transparent);
-  background: color-mix(in srgb, var(--error) 10%, #ffffff);
-  color: var(--error);
-}
-
-.admin-notice.info {
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-  background: color-mix(in srgb, var(--accent) 10%, #ffffff);
-  color: #1f4ec7;
+  background: #fafbfe;
+  color: #32435c;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .admin-content {
@@ -697,47 +671,12 @@ body {
 }
 
 @media (max-width: 1024px) {
-  .admin-shell {
-    grid-template-columns: 72px 1fr;
-  }
-
-  .admin-nav {
-    width: 72px;
-  }
-
-  .admin-nav-brand {
-    display: none;
-  }
-
   .admin-grid.three {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 768px) {
-  .admin-shell {
-    grid-template-columns: 1fr;
-  }
-
-  .admin-nav {
-    min-height: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .admin-nav-list,
-  .admin-nav-foot {
-    display: flex;
-    overflow-x: auto;
-    gap: 6px;
-    padding: 8px;
-  }
-
-  .admin-nav-item {
-    min-width: 42px;
-    justify-content: center;
-  }
-
   .admin-topbar {
     align-items: flex-start;
     flex-direction: column;
